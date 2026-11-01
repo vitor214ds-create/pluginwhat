@@ -1,0 +1,7 @@
+{
+  "name": "pluginwhat-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs", "check": "node ../scripts/check-extension.mjs" }
+}

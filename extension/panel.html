@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pluginwhat</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="topbar"><div class="logo">pw<span>•</span></div><div><h1>Pluginwhat</h1><p>Sua sequência, no seu ritmo.</p></div><span class="version">v1.0</span></header>
+  <main>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section class="status-card" aria-label="Progresso">
+      <div class="status-heading"><span class="eyebrow">SEQUÊNCIA DE ENVIO</span><span id="badge" class="badge">Pronto para começar</span></div>
+      <div class="metrics"><strong id="sent">0</strong><span>envios confirmados <small id="total">de 0 contatos</small></span></div>
+      <progress id="progress" max="1" value="0" aria-label="Contatos processados"></progress>
+      <p id="notice" aria-live="polite">Importe sua lista para montar a sequência.</p>
+      <p id="countdown" class="countdown"></p>
+      <div id="current" class="current" hidden></div>
+      <div class="controls">
+        <button id="start" class="primary" type="button">Iniciar sequência <span>→</span></button>
+        <button id="pause" type="button" hidden>Pausar</button>
+        <button id="resume" class="primary" type="button" hidden>Retomar →</button>
+        <button id="stop" class="danger" type="button" hidden>Encerrar</button>
+      </div>
+      <div id="review" class="review" hidden>
+        <p id="review-text"></p>
+        <button id="mark-sent" type="button">Conferi: já foi enviado</button>
+        <button id="skip" type="button">Pular este contato</button>
+      </div>
+    </section>
+    <form id="form">
+      <fieldset id="configuration">
+        <section class="card">
+          <h2><span class="step">01</span> Sua lista de contatos <span class="filetag">TXT</span></h2>
+          <label class="upload" for="file"><span class="upload-icon">↑</span><strong>Importar arquivo .txt</strong><span>Um número por linha · até 5.000 contatos</span></label>
+          <input id="file" type="file" accept=".txt,text/plain" class="file-input">
+          <label class="check"><input id="brazil" type="checkbox" checked> Adicionar DDI 55 aos números com DDD</label>
+          <p class="hint">Ex.: +55 11 91234-5678. Para outros países, inclua + e o DDI.</p>
+          <p id="import-summary" class="import-summary" aria-live="polite">Nenhum arquivo selecionado.</p>
+          <details id="invalid-details" hidden><summary>Ver linhas ignoradas</summary><ul id="invalid-list"></ul></details>
+          <div id="preview" class="preview"></div>
+        </section>
+        <section class="card">
+          <h2><span class="step">02</span> Três mensagens, um ciclo</h2>
+          <p class="hint intro">Cada contato recebe apenas uma mensagem.<br>1 → 2 → 3 → 1 → 2 → 3…</p>
+          <div class="message-field"><label for="message-0"><span class="pill">M1</span> Mensagem 1 <small>contatos 1, 4, 7…</small></label><textarea id="message-0" rows="3" maxlength="3000" placeholder="Escreva a primeira mensagem…" required></textarea><span class="counter" id="counter-0">0 / 3000</span></div>
+          <div class="message-field"><label for="message-1"><span class="pill blue">M2</span> Mensagem 2 <small>contatos 2, 5, 8…</small></label><textarea id="message-1" rows="3" maxlength="3000" placeholder="Escreva a segunda mensagem…" required></textarea><span class="counter" id="counter-1">0 / 3000</span></div>
+          <div class="message-field"><label for="message-2"><span class="pill violet">M3</span> Mensagem 3 <small>contatos 3, 6, 9…</small></label><textarea id="message-2" rows="3" maxlength="3000" placeholder="Escreva a terceira mensagem…" required></textarea><span class="counter" id="counter-2">0 / 3000</span></div>
+        </section>
+        <section class="card">
+          <h2><span class="step">03</span> Intervalo entre contatos</h2>
+          <div class="interval"><label>Minutos<input id="minutes" type="number" min="0" max="1440" step="1" value="2" required></label><span>:</span><label>Segundos<input id="seconds" type="number" min="0" max="59" step="1" value="0" required></label></div>
+          <div class="presets"><button type="button" data-seconds="90">1 min 30 s</button><button type="button" data-seconds="120">2 min</button><button type="button" data-seconds="180">3 min</button></div>
+          <p class="hint">A contagem começa após a confirmação do envio. O primeiro contato é processado ao iniciar. Mínimo de 30 segundos.</p>
+          <p id="estimate" class="estimate"></p>
+        </section>
+      </fieldset>
+    </form>
+    <section class="card history">
+      <div class="history-heading"><h2>Registro da sequência</h2><button id="export" type="button" class="text-button">Exportar CSV ↓</button></div>
+      <p id="history-empty" class="hint">Os resultados aparecerão aqui.</p>
+      <ol id="history-list"></ol>
+    </section>
+    <footer><p>Use apenas com contatos que autorizaram o recebimento. Mantenha o Chrome e o computador ligados. Durante os envios, deixe esta aba dedicada à sequência.</p><p>Se houver dúvida no envio, a fila pausa para revisão. Intervalos não garantem ausência de restrições na conta.</p><button id="clear" class="text-button" type="button">Apagar dados locais</button></footer>
+  </main>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
