@@ -13,7 +13,7 @@ const storage = object => ({
 globalThis.chrome = {
   runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, onMessage: event('message'), onStartup: event('startup') },
   storage: { local: storage(local), session: storage(session) },
-  alarms: { async clear(name) { alarms.delete(name); }, async create(name, options) { alarms.set(name, options); }, onAlarm: event('alarm') },
+  alarms: { async get(name) { return alarms.get(name); }, async clear(name) { alarms.delete(name); }, async create(name, options) { alarms.set(name, options); }, onAlarm: event('alarm') },
   tabs: { async get(id) { if (!Number.isInteger(id)) throw new Error('closed'); return { id, url: 'https://web.whatsapp.com/' }; },
     async update() { throw new Error('Unexpected tab navigation'); },
     async sendMessage(id, request, options) {
@@ -65,20 +65,22 @@ test('two simultaneous START commands cannot create overlapping campaigns', asyn
 test('a successful ack advances once and the alarm does not open another conversation before the interval', async () => {
   await open(); const jobId = state().job.id;
   await call('PREPARED', { jobId }, content);
-  const now = Date.now(); await call('RESULT', { jobId, success: true }, content);
+  const now = Date.now(); await call('RESULT', { jobId, success: true, evidence: { confirmed: true } }, content);
   assert.equal(state().cursor, 1); assert.equal(state().queue[0].status, 'sent');
   assert.ok(state().nextAt >= now + 90000);
   events.alarm({ name: 'pluginwhat-next' }); await flush();
   assert.equal(runs.length, 1);
-  await assert.rejects(call('RESULT', { jobId, success: true }, content), /cancelado/);
+  assert.deepEqual(await call('RESULT', { jobId, success: true, evidence: { confirmed: true } }, content), { accepted: true });
+  assert.equal(state().cursor, 1);
 });
 test('closing a tab during a click records uncertainty and blocks resume', async () => {
   await open(); const jobId = state().job.id; await call('PREPARED', { jobId }, content);
   events.removed(7); await flush();
   assert.equal(state().status, 'paused'); assert.equal(state().queue[0].status, 'uncertain');
   await assert.rejects(call('RESUME'), /Confira/);
-  await call('RESOLVE', { resolution: 'skipped' }); await call('RESUME');
-  assert.equal(state().cursor, 1); assert.equal(state().queue[1].template, 1);
+  await assert.rejects(call('RESOLVE', { resolution: 'skipped' }));
+  await call('RESOLVE', { resolution: 'retry' });
+  assert.equal(state().cursor, 0); assert.equal(state().queue[0].status, 'pending');
 });
 test('timeout after click pauses instead of retrying a potentially sent message', async () => {
   await open(); const jobId = state().job.id; await call('PREPARED', { jobId }, content);
@@ -95,4 +97,26 @@ test('WhatsApp content scripts cannot start campaigns and a pause cancels stale 
 test('Chrome startup pauses in-flight work instead of sending unattended', async () => {
   await open(); events.startup(); await flush();
   assert.equal(state().status, 'paused'); assert.equal(state().job, null);
+});
+
+test('confirmed unregistered phone advances automatically and schedules the full interval', async () => {
+  await open(); const jobId = state().job.id, before = Date.now();
+  await call('RESULT', { jobId, preparing: true, clicked: false, errorCode: 'UNREGISTERED', unregisteredConfirmed: true, error: 'Não cadastrado.' }, content);
+  assert.equal(state().cursor, 1); assert.equal(state().queue[0].status, 'invalid'); assert.equal(state().status, 'running');
+  assert.ok(state().nextAt >= before + 90000); assert.ok(alarms.has('pluginwhat-watchdog'));
+});
+test('generic lookup failure stays on the same contact and retries without skipping', async () => {
+  await open(); const jobId = state().job.id;
+  await call('RESULT', { jobId, preparing: true, clicked: false, retryable: true, error: 'Sem conexão.' }, content);
+  assert.equal(state().cursor, 0); assert.equal(state().queue[0].status, 'pending'); assert.equal(state().status, 'running'); assert.equal(state().job, null);
+});
+test('a failure before the actual click does not mark a valid first contact sent or uncertain', async () => {
+  await open(); const jobId = state().job.id; await call('PREPARED', { jobId }, content);
+  await call('RESULT', { jobId, preparing: false, clicked: false, retryable: true, error: 'Editor mudou.' }, content);
+  assert.equal(state().queue[0].status, 'pending'); assert.equal(state().cursor, 0); assert.equal(state().status, 'running');
+});
+test('a claimed success without outgoing acknowledgement cannot advance the queue', async () => {
+  await open(); const jobId = state().job.id; await call('PREPARED', { jobId }, content);
+  await call('RESULT', { jobId, success: true, clicked: true }, content);
+  assert.equal(state().cursor, 0); assert.equal(state().queue[0].status, 'uncertain');
 });

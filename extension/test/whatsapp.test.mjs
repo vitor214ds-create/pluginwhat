@@ -118,3 +118,18 @@ test('opening in-page preserves an existing unrelated draft instead of overwriti
   await assert.rejects(prepare(job, { doc: f.doc, timeout: 1, fillMessage: true }), /rascunho diferente/);
   assert.equal(edits(), 0); assert.equal(f.box.innerText, 'Meu rascunho'); assert.equal(f.clicks(), 0);
 });
+
+test('online/typing/last-seen changes before and after the click do not change the recipient identity', async () => {
+  const f = fixture(); const snapshot = await prepare(job, { doc: f.doc, timeout: 1 });
+  f.header.innerText = `+${job.phone}\ndigitando…`;
+  const click = f.button.click;
+  f.button.click = () => { click(); f.header.innerText = `+${job.phone}\nvisto por último hoje`; };
+  const evidence = await sendPrepared(job, snapshot, { doc: f.doc, timeout: 1 });
+  assert.equal(evidence.confirmed, true); assert.equal(f.clicks(), 1);
+});
+test('a genuinely different conversation title stops before clicking', async () => {
+  const f = fixture(); const snapshot = await prepare(job, { doc: f.doc, timeout: 1 });
+  f.header.innerText = '+5521912345678\nonline';
+  await assert.rejects(sendPrepared(job, snapshot, { doc: f.doc, timeout: 1 }), /conversa mudou/);
+  assert.equal(f.clicks(), 0);
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseContacts, normalizePhone, validateConfig, createCampaign, completeContact,
+import { parseContacts, normalizePhone, validateConfig, createCampaign, completeContact, skipUnregisteredContact,
   pauseCampaign, resumeCampaign, resolveContact, jobUrl, matchesJob } from '../core.js';
 
 const config = { contacts: ['5511912345678', '5521912345678', '5531912345678', '5541912345678', '5551912345678', '5561912345678', '5571912345678'],
@@ -51,7 +51,7 @@ test('pausing before a click keeps the current contact; skipping preserves the t
   const campaign = createCampaign(config, 10);
   campaign.job = { phase: 'preparing' }; pauseCampaign(campaign, 'pause');
   assert.equal(campaign.queue[0].status, 'pending'); resumeCampaign(campaign);
-  pauseCampaign(campaign, 'invalid'); resolveContact(campaign, 'skipped'); resumeCampaign(campaign);
+  campaign.job = { phase: 'preparing' }; skipUnregisteredContact(campaign, 'Número não cadastrado.');
   assert.equal(campaign.cursor, 1); assert.equal(campaign.queue[1].template, 1);
 });
 test('resume cannot shorten the configured delay since a send attempt', () => {

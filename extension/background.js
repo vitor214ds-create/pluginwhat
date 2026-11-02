@@ -1,7 +1,8 @@
 import { STATE_KEY, createCampaign, pauseCampaign, resumeCampaign, resolveContact,
-  completeContact } from './core.js';
+  completeContact, skipUnregisteredContact } from './core.js';
 
 const ALARM = 'pluginwhat-next';
+const WATCHDOG = 'pluginwhat-watchdog';
 let serial = Promise.resolve();
 // Every mutation and alarm is serialized. No long-running timers live in the worker.
 export function exclusive(operation) {
@@ -17,10 +18,13 @@ async function save(state) {
   return state;
 }
 async function arm(state) {
-  await chrome.alarms.clear(ALARM);
   if (state?.status === 'running') {
     const due = state.job ? state.job.deadline : state.nextAt;
     if (due != null) await chrome.alarms.create(ALARM, { when: Math.max(Date.now() + 100, due) });
+    const watchdog = await chrome.alarms.get(WATCHDOG);
+    if (!watchdog) await chrome.alarms.create(WATCHDOG, { periodInMinutes: 0.5 });
+  } else {
+    await chrome.alarms.clear(ALARM); await chrome.alarms.clear(WATCHDOG);
   }
 }
 const isWhatsApp = url => { try { return new URL(url).origin === 'https://web.whatsapp.com'; } catch { return false; } };
@@ -52,7 +56,8 @@ async function dispatch() {
     const tab = await chrome.tabs.get(state.tabId);
     if (!isWhatsApp(tab.url)) throw new Error('Reabra o WhatsApp Web para retomar.');
     state.job = { id: crypto.randomUUID(), phone: row.phone, message: state.messages[row.template],
-      phase: 'opening', deadline: Date.now() + 90000 };
+      phase: 'opening', deadline: Date.now() + 120000 };
+    row.attempts = (row.attempts || 0) + 1;
     state.notice = `Abrindo contato ${state.cursor + 1} de ${state.queue.length}.`;
     await save(state);
     const accepted = await chrome.tabs.sendMessage(state.tabId, { type: 'RUN_JOB', jobId: state.job.id }, { frameId: 0 });
@@ -63,6 +68,10 @@ async function dispatch() {
 export async function handle(request, sender) {
   if (!request || typeof request.type !== 'string') throw new Error('Comando inválido.');
   const state = await getState();
+  if (request.type === 'TICK') {
+    if (sender.tab?.id !== state?.tabId || sender.frameId !== 0 || !isWhatsApp(sender.url)) return {};
+    return { dispatch: true };
+  }
   if (request.type === 'CONTENT_READY') {
     if (!state?.job || state.status !== 'running' || state.job.phase !== 'opening' ||
         sender.tab?.id !== state.tabId || sender.frameId !== 0 || !isWhatsApp(sender.url) ||
@@ -72,15 +81,31 @@ export async function handle(request, sender) {
   }
   if (request.type === 'PREPARED') {
     requireJob(state, sender, request, 'preparing');
-    state.job.phase = 'sending'; state.job.deadline = Date.now() + 30000;
+    state.job.phase = 'sending'; state.job.deadline = Date.now() + 90000;
     state.lastAttemptAt = Date.now(); state.notice = `Enviando ao contato ${state.cursor + 1}.`;
     await save(state); return { approved: true };
   }
   if (request.type === 'RESULT') {
+    if (state?.lastResult?.jobId === request.jobId && sender.tab?.id === state.tabId && sender.frameId === 0 && isWhatsApp(sender.url) &&
+        state.lastResult.documentId === sender.documentId) return { accepted: true };
     requireJob(state, sender, request, request.preparing ? 'preparing' : 'sending');
-    if (request.success && !request.preparing) await save(completeContact(state));
-    else await save(pauseCampaign(state, String(request.error || 'Não foi possível confirmar o envio.').slice(0, 400)));
-    return {};
+    state.lastResult = { jobId: request.jobId, documentId: sender.documentId };
+    const detail = String(request.error || 'Não foi possível confirmar o envio.').slice(0, 400);
+    if (!request.success) state.queue[state.cursor].detail = detail;
+    if (request.success && !request.preparing && request.evidence?.confirmed === true) {
+      state.queue[state.cursor].messageId = String(request.evidence.messageId || '').slice(0, 200);
+      await save(completeContact(state));
+    } else if (request.preparing && request.errorCode === 'UNREGISTERED' && request.unregisteredConfirmed === true) {
+      await save(skipUnregisteredContact(state, detail));
+    } else if (request.clicked === false && request.retryable === true && (state.queue[state.cursor].attempts || 0) < 3) {
+      // Retry this same contact only when no click occurred. Never advance past a valid number.
+      state.job = null; state.nextAt = Date.now() + 5000;
+      state.notice = 'A abertura falhou antes do envio. Nova tentativa automática neste mesmo contato em 5 segundos.';
+      await save(state);
+    } else {
+      await save(pauseCampaign(state, detail, { uncertain: !request.preparing && request.clicked !== false }));
+    }
+    return { accepted: true };
   }
   requirePanel(sender);
   if (request.type === 'GET_STATE') return { state };
@@ -109,6 +134,8 @@ export async function handle(request, sender) {
       throw new Error('A confirmação manual é apenas para envios incertos.');
     }
     await save(resolveContact(state, request.resolution));
+    if (state.status === 'paused') { resumeCampaign(state); await save(state); }
+    return { state, dispatch: state.status === 'running' };
   } else if (request.type === 'STOP') {
     if (state && ['running', 'paused'].includes(state.status)) {
       pauseCampaign(state, 'Sequência encerrada. Você pode importar outra lista.');
@@ -117,7 +144,7 @@ export async function handle(request, sender) {
   } else if (request.type === 'CLEAR') {
     if (state?.status === 'running') throw new Error('Pause ou encerre antes de apagar.');
     await chrome.storage.local.remove([STATE_KEY, 'pluginwhatDraft']);
-    await chrome.alarms.clear(ALARM); return { state: null };
+    await chrome.alarms.clear(ALARM); await chrome.alarms.clear(WATCHDOG); return { state: null };
   } else throw new Error('Comando desconhecido.');
   return { state: await getState() };
 }
@@ -129,7 +156,7 @@ chrome.runtime.onMessage.addListener((request, sender, reply) => {
   }).catch(error => reply({ ok: false, error: error.message }));
   return true;
 });
-chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === ALARM) void exclusive(dispatch); });
+chrome.alarms.onAlarm.addListener(alarm => { if ([ALARM, WATCHDOG].includes(alarm.name)) void exclusive(dispatch); });
 chrome.tabs.onRemoved.addListener(tabId => void exclusive(async () => {
   const state = await getState();
   if (state?.tabId === tabId && state.status === 'running') await save(pauseCampaign(state, 'A aba foi fechada. Abra o painel em outra aba do WhatsApp para retomar.'));

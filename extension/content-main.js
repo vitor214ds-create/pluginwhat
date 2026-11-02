@@ -30,6 +30,56 @@ export async function start() {
       if (accepted) void runner.run(request.jobId);
     }
   });
+  void createPageScheduler({ doc: document, api: chrome }).start();
+}
+
+export function createPageScheduler({ doc, api, now = Date.now, timers = {
+  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms), clearTimeout: id => globalThis.clearTimeout(id)
+} }) {
+  let state = null, timer = null, disposed = false, revision = 0;
+  function schedule() {
+    if (timer !== null) timers.clearTimeout(timer);
+    timer = null;
+    if (disposed || state?.status !== 'running' || state.job || state.nextAt == null) return;
+    timer = timers.setTimeout(wake, Math.max(50, state.nextAt - now()));
+  }
+  async function wake() {
+    timer = null;
+    if (disposed || state?.status !== 'running' || state.job) return;
+    if (now() < state.nextAt) { schedule(); return; }
+    try { await api.runtime.sendMessage({ type: 'TICK' }); } catch { /* Chrome alarm is the independent fallback. */ }
+    // Retry only the scheduler wake-up, never a message click.
+    if (!disposed && state?.status === 'running' && !state.job) timer = timers.setTimeout(wake, 1000);
+  }
+  const onStorage = (changes, area) => {
+    if (area === 'local' && changes.pluginwhatCampaign) { revision++; state = changes.pluginwhatCampaign.newValue; schedule(); }
+  };
+  return {
+    async start() {
+      api.storage.onChanged.addListener(onStorage);
+      doc.addEventListener('visibilitychange', schedule);
+      const initialRevision = revision;
+      const stored = (await api.storage.local.get('pluginwhatCampaign')).pluginwhatCampaign;
+      if (revision === initialRevision) state = stored;
+      schedule();
+    },
+    stop() {
+      disposed = true; if (timer !== null) timers.clearTimeout(timer);
+      api.storage.onChanged.removeListener(onStorage); doc.removeEventListener('visibilitychange', schedule);
+    }
+  };
+}
+
+async function report(api, payload) {
+  let error;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await api.runtime.sendMessage(payload);
+      if (response?.ok && response.accepted) return;
+      throw new Error(response?.error || 'Confirmação do progresso indisponível.');
+    } catch (caught) { error = caught; }
+  }
+  throw error;
 }
 
 export function createJobRunner({ host, doc = document, api = chrome,
@@ -40,7 +90,7 @@ export function createJobRunner({ host, doc = document, api = chrome,
     async run(jobId) {
       if (activeJobId !== null) return;
       activeJobId = jobId;
-      let cancelled = false, preparing = true, job;
+      let cancelled = false, preparing = true, clicked = false, job, result;
       // A real click or typing in WhatsApp while preparing/sending invalidates the operation.
       const onInteraction = event => { if (event.isTrusted && !event.composedPath().includes(host)) cancelled = true; };
       const onStorage = (changes, area) => {
@@ -54,17 +104,24 @@ export function createJobRunner({ host, doc = document, api = chrome,
         const ready = await api.runtime.sendMessage({ type: 'CONTENT_READY', jobId });
         job = ready?.job;
         if (!job || !ready.ok || cancelled) return;
-        const options = { doc, cancelled: () => cancelled };
+        const options = { doc, cancelled: () => cancelled, onClick: () => { clicked = true; } };
         await actions.openConversation(job, options);
         const snapshot = await actions.prepare(job, { ...options, fillMessage: true });
         const approved = await api.runtime.sendMessage({ type: 'PREPARED', jobId: job.id });
         if (approved.ok && approved.approved) preparing = false;
         if (!approved.ok || !approved.approved || cancelled) throw new Error(approved.error || 'Envio cancelado antes do clique.');
-        await actions.sendPrepared(job, snapshot, options);
-        await api.runtime.sendMessage({ type: 'RESULT', jobId: job.id, success: true });
+        const evidence = await actions.sendPrepared(job, snapshot, options);
+        if (!evidence?.confirmed) throw new Error('O WhatsApp não confirmou o envio da mensagem.');
+        result = { type: 'RESULT', jobId: job.id, success: true, evidence };
+        await report(api, result);
       } catch (error) {
         if (job) {
-          try { await api.runtime.sendMessage({ type: 'RESULT', jobId: job.id, success: false, preparing, error: error.message }); }
+          // If an acknowledgement was already observed, retry only its report.
+          // A lost reply must never turn a confirmed send into another click.
+          const payload = result || { type: 'RESULT', jobId: job.id, success: false, preparing, clicked,
+            errorCode: error.code || 'UNKNOWN', retryable: error.retryable === true,
+            unregisteredConfirmed: error.code === 'UNREGISTERED' && Boolean(error.evidence), error: error.message };
+          try { await report(api, payload); }
           catch { /* The persisted watchdog pauses an interrupted attempt. */ }
         }
       } finally {

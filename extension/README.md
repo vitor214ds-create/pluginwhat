@@ -18,7 +18,7 @@ Não é preciso instalar Node.js para usar. A extensão é Manifest V3, para Chr
 2. Confira os números da prévia. Números repetidos são removidos após normalização. Linhas inválidas são ignoradas e exibidas com a numeração original. A ordem da primeira ocorrência é preservada.
 3. Preencha as três mensagens, até 3.000 caracteres cada.
 4. Defina minutos e segundos. Exemplos: `1:30`, `2:00`, `3:00`. O intervalo pode variar de 30 segundos a 24 horas.
-5. Clique em **Iniciar sequência**. O primeiro contato é processado imediatamente; os seguintes aguardam o intervalo após a confirmação do envio anterior.
+5. Clique em **Iniciar sequência uma única vez**. O primeiro contato é processado imediatamente; o restante da lista avança automaticamente, sem clicar em cada contato. O intervalo começa após a confirmação de cada envio ou da identificação de um número não cadastrado.
 
 | Contato na lista | Mensagem |
 | --- | --- |
@@ -29,7 +29,7 @@ Não é preciso instalar Node.js para usar. A extensão é Manifest V3, para Chr
 | 5 | 2 |
 | 6 | 3 |
 
-Cada contato recebe **uma** mensagem nessa sequência. Pular um contato mantém a distribuição original: o contato 4 sempre usa a mensagem 1. Uma nova sequência com a mesma lista é uma nova campanha e pode enviar novamente aos mesmos números.
+Cada contato recebe **uma** mensagem nessa sequência. Somente números que o WhatsApp identifica explicitamente como não cadastrados são pulados automaticamente. Mesmo nesses casos, a extensão espera o intervalo configurado antes de abrir o próximo contato. A distribuição original é mantida: o contato 4 sempre usa a mensagem 1. Uma nova sequência com a mesma lista é uma nova campanha e pode enviar novamente aos mesmos números.
 
 Mantenha o Chrome aberto e o computador ligado, conectado à internet e sem suspensão. Reserve a aba da campanha para os envios: a extensão usa Nova conversa para abrir cada contato dentro da mesma página, sem recarregar ou trocar o endereço da aba. Use outras abas para navegar. Não altere a conversa durante um envio.
 
@@ -38,16 +38,18 @@ Mantenha o Chrome aberto e o computador ligado, conectado à internet e sem susp
 - **Pausar:** impede a continuação da fila. Um clique em envio que já ocorreu pode concluir; nesse caso, o contato fica para revisão.
 - **Retomar:** continua a partir do contato pendente e respeita o intervalo já programado.
 - **Encerrar:** termina a campanha e libera a configuração para iniciar outra.
-- **Pular este contato:** registra o contato como pulado e avança. A retomada é manual.
-- **Conferi: já foi enviado:** aparece apenas quando o resultado ficou incerto. Confira a conversa antes de usar.
+- **Conferi: já foi enviado:** aparece apenas quando o resultado ficou incerto. Após sua confirmação, o registro avança e a sequência continua automaticamente depois do intervalo.
+- **Conferi: não foi enviado. Tentar de novo:** mantém o mesmo contato e retoma a fila após sua conferência. Use apenas depois de verificar a conversa para evitar duplicidade.
 - **Exportar CSV:** baixa o registro completo com número, variante, resultado e horário.
 - **Apagar dados locais:** remove a lista, mensagens e registro da extensão neste perfil do Chrome.
 
-Se o número não existir, o WhatsApp sair da conta, a conexão falhar, a interface mudar ou o destinatário não puder ser confirmado, a fila pausa. Não há repetição automática de tentativas ambíguas. Fechar a aba ou reiniciar o Chrome também pausa a campanha. O progresso é recuperado do armazenamento local; a extensão mantém somente a campanha mais recente.
+Uma busca vazia, um convite para usar o WhatsApp ou um erro de conexão não são tratados como número inexistente. Quando uma falha transitória ocorre antes de qualquer clique de envio, a extensão faz até três tentativas automáticas no mesmo contato, com cinco segundos entre tentativas. Depois disso, pausa mantendo o contato pendente. Se o clique já ocorreu mas o resultado ficou incerto, a extensão pausa para conferência e não repete o clique automaticamente. Fechar a aba ou reiniciar o Chrome também pausa a campanha. O progresso é recuperado do armazenamento local; a extensão mantém somente a campanha mais recente.
 
 ## Como o envio é confirmado
 
 A extensão pesquisa o telefone em Nova conversa, abre o resultado e preenche o editor dentro da página já carregada. Antes de clicar no botão de envio, confere o número do cabeçalho ou dos dados do contato e o texto no editor. Depois, aguarda uma nova mensagem de saída com a confirmação visual do WhatsApp (um ou dois tiques). Isso confirma envio pelo WhatsApp, **não leitura ou entrega ao destinatário**. Mensagens que continuam com o relógio não são marcadas como enviadas.
+
+Mudanças de presença, como “online”, “digitando” ou “visto por último”, não são usadas como identidade da conversa. Mensagens antigas com texto igual não confirmam um novo envio: a extensão considera o identificador da nova mensagem, quando disponível. A confirmação do progresso pode ser repetida sem repetir o envio. O agendamento usa alarmes do Chrome e um despertador na página, com verificação periódica de recuperação. Ambos respeitam o horário mínimo configurado; computador suspenso, navegador fechado ou limitação do Chrome podem atrasar o avanço.
 
 O adaptador está em `whatsapp.js`. Seus seletores dependem da interface do WhatsApp Web, que pode mudar sem aviso. Se a interface não for reconhecida, o comportamento é pausar. Cabeçalhos com número e a gaveta de dados do contato são suportados; a confirmação de contatos salvos pode exigir atualização dos seletores em versões diferentes do WhatsApp.
 
@@ -59,14 +61,19 @@ Use com contatos que autorizaram o recebimento. O intervalo é uma preferência 
 
 ## Desenvolvimento e verificação
 
-Da raiz do repositório, com Node.js 20 ou superior:
+Da raiz do repositório, com Node.js 22 ou superior:
 
 ```sh
 node --test extension/test/*.test.mjs
+npm --prefix qa ci
+node --test extension/test/*.test.mjs qa/*.test.mjs
+node qa/realtime-scheduler.mjs
 node scripts/check-extension.mjs
 python3 scripts/package-extension.py
 ```
 
-Os testes automatizados cobrem importação, rodízio, intervalo após confirmação, pausa/retomada, concorrência, autorização por aba/documento e prevenção de repetição de envios incertos. `test/whatsapp.test.mjs` testa o adaptador com DOM simulado. Eles não substituem um teste de aceitação em uma conta real.
+Os testes unitários cobrem importação, rodízio, intervalo após confirmação, pausa/retomada, concorrência, autorização por aba/documento e prevenção de repetição de envios incertos. A suíte em `qa/` conecta a fila, o executor, os alarmes e o adaptador a um DOM de teste: cobre campanhas inteiras com 120 segundos simulados entre contatos, número inexistente no início/meio, mudança de presença, resposta perdida, suspensão do processo da extensão, falha de conexão e relógio sem confirmação. O teste separado `realtime-scheduler.mjs` aguarda dois minutos reais para conferir o despertador automático. Esses testes não substituem um teste de aceitação em uma conta real.
 
 Antes de usar uma lista real, teste com números próprios autorizados: importar dois formatos do mesmo número, enviar uma lista curta com as três variantes, conferir os horários, pausar durante a espera e atualizar a aba. Teste também um número inválido e uma desconexão. Esta implementação não foi validada em uma sessão real do WhatsApp neste ambiente.
+
+Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.com/docs/extensions/reference/api/alarms), [ciclo de vida da extensão](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle), [troca de mensagens da extensão](https://developer.chrome.com/docs/extensions/develop/concepts/messaging) e [confirmações do WhatsApp](https://faq.whatsapp.com/665923838265756/).

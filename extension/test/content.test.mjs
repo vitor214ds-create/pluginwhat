@@ -14,13 +14,13 @@ function fixture(actions = {}) {
       calls.push(request);
       if (request.type === 'CONTENT_READY') return { ok: true, job: { id: request.jobId, phone: '5511912345678', message: request.jobId } };
       if (request.type === 'PREPARED') return { ok: true, approved: true };
-      return { ok: true };
+      return { ok: true, accepted: true };
     } }
   };
   const runner = createJobRunner({ doc, api, host: {}, actions: {
     async openConversation(job, options) { assert.equal(options.doc, doc); steps.push(['open', job.id]); },
     async prepare(job, options) { assert.equal(options.fillMessage, true); steps.push(['prepare', job.id]); return {}; },
-    async sendPrepared(job) { steps.push(['send', job.id]); }, ...actions
+    async sendPrepared(job, _snapshot, options) { options.onClick(); steps.push(['send', job.id]); return { confirmed: true }; }, ...actions
   } });
   return { runner, listeners, storageListeners, calls, steps };
 }

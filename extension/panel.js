@@ -4,7 +4,7 @@ const $ = id => document.getElementById(id);
 const messages = [0, 1, 2].map(i => $(`message-${i}`));
 let state = null, contacts = [], rawText = '', report = null, fileName = '', saveTimer, busy = false;
 const statuses = { running: 'Em andamento', paused: 'Pausado', completed: 'Concluído', stopped: 'Encerrado' };
-const rowStatuses = { sent: 'Enviado', pending: 'Pendente', skipped: 'Pulado', uncertain: 'Conferir envio' };
+const rowStatuses = { sent: 'Enviado', pending: 'Pendente', invalid: 'Não cadastrado', skipped: 'Pulado na versão anterior', uncertain: 'Conferir envio' };
 function showError(error) { $('error').textContent = error?.message || String(error); $('error').hidden = false; }
 async function command(type, extra = {}) {
   const result = await chrome.runtime.sendMessage({ type, ...extra });
@@ -57,7 +57,7 @@ function renderButtons() {
   $('stop').hidden = !active;
   const uncertain = state?.queue[state.cursor]?.status === 'uncertain';
   $('resume').disabled = busy || uncertain;
-  for (const id of ['pause', 'stop', 'skip', 'mark-sent']) $(id).disabled = busy;
+  for (const id of ['pause', 'stop', 'retry', 'mark-sent']) $(id).disabled = busy;
   try { validateConfig(config()); $('start').disabled = busy; } catch { $('start').disabled = true; }
   $('clear').disabled = busy || state?.status === 'running';
   $('export').disabled = !state?.queue?.length;
@@ -74,14 +74,16 @@ function renderState() {
   $('current').textContent = current ? `Contato ${state.cursor + 1} · +${current.phone} · Mensagem ${current.template + 1}` : '';
   $('review').hidden = state?.status !== 'paused' || !current;
   $('mark-sent').hidden = current?.status !== 'uncertain';
+  $('retry').hidden = current?.status !== 'uncertain';
   $('review-text').textContent = current?.status === 'uncertain' ?
-    'O envio pode ter ocorrido. Abra a conversa e confira. Não haverá nova tentativa automática.' : 'Corrija o problema e retome, ou pule este contato.';
+    'O envio não pôde ser confirmado. Confira a conversa antes de escolher uma opção. O contato permanece na fila.' : 'Corrija o problema e clique em Retomar. Este contato permanece na fila; ele não será pulado.';
   $('history-empty').hidden = Boolean(state?.queue?.length);
   $('history-list').replaceChildren();
   // Bounded rendering for large lists; CSV always includes the full queue.
   const begin = Math.max(0, (state?.cursor || 0) - 20);
   (state?.queue || []).slice(begin, begin + 50).forEach((row, offset) => {
     const li = document.createElement('li'); li.dataset.status = row.status;
+    if (row.detail) li.title = row.detail;
     const number = document.createElement('span'); number.textContent = `${begin + offset + 1}. +${row.phone} · M${row.template + 1}`;
     const status = document.createElement('span'); status.textContent = rowStatuses[row.status] || row.status;
     li.append(number, status); $('history-list').append(li);
@@ -90,7 +92,7 @@ function renderState() {
 }
 function tick() {
   $('countdown').textContent = state?.status === 'running' && !state.job && state.nextAt ?
-    `Próximo contato em ${formatDuration((state.nextAt - Date.now()) / 1000)}` : '';
+    `Próximo contato automaticamente em ${formatDuration((state.nextAt - Date.now()) / 1000)}` : '';
 }
 async function action(type, extra) {
   if (busy) return;
@@ -130,7 +132,7 @@ $('pause').addEventListener('click', () => action('PAUSE'));
 $('resume').addEventListener('click', () => action('RESUME'));
 $('stop').addEventListener('click', () => action('STOP'));
 $('mark-sent').addEventListener('click', () => action('RESOLVE', { resolution: 'sent' }));
-$('skip').addEventListener('click', () => action('RESOLVE', { resolution: 'skipped' }));
+$('retry').addEventListener('click', () => action('RESOLVE', { resolution: 'retry' }));
 $('clear').addEventListener('click', async () => {
   if (!confirm('Apagar a lista, os textos e o registro desta extensão neste navegador?')) return;
   clearTimeout(saveTimer);

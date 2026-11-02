@@ -64,9 +64,9 @@ export function createCampaign(config, tabId, now = Date.now()) {
   };
 }
 
-export function pauseCampaign(state, reason) {
+export function pauseCampaign(state, reason, { uncertain = state?.job?.phase === 'sending' } = {}) {
   if (!state) return state;
-  if (state.job?.phase === 'sending') {
+  if (uncertain) {
     state.queue[state.cursor].status = 'uncertain';
     state.queue[state.cursor].detail = 'O envio pode ter ocorrido. Confira a conversa antes de continuar.';
   }
@@ -76,15 +76,25 @@ export function pauseCampaign(state, reason) {
 }
 
 export function completeContact(state, now = Date.now()) {
+  return advanceContact(state, 'sent', now);
+}
+
+export function skipUnregisteredContact(state, detail, now = Date.now()) {
+  if (state?.job?.phase !== 'preparing') throw new Error('Número inexistente só pode ser confirmado antes do envio.');
+  state.queue[state.cursor].detail = detail;
+  return advanceContact(state, 'invalid', now);
+}
+
+function advanceContact(state, outcome, now) {
   const row = state.queue[state.cursor];
-  row.status = 'sent'; row.finishedAt = now;
+  row.status = outcome; row.finishedAt = now;
   state.cursor++; state.job = null; state.updatedAt = now;
   if (state.cursor >= state.queue.length) {
     state.status = 'completed'; state.nextAt = null; state.notice = 'Sequência concluída.';
   } else {
     state.nextAt = now + state.intervalMs;
     state.notBefore = state.nextAt;
-    state.notice = 'Aguardando o intervalo para o próximo contato.';
+    state.notice = outcome === 'invalid' ? 'Número não cadastrado no WhatsApp. Aguardando o intervalo para o próximo contato.' : 'Envio confirmado. Aguardando o intervalo para o próximo contato.';
   }
   return state;
 }
@@ -100,8 +110,13 @@ export function resumeCampaign(state, now = Date.now()) {
 }
 
 export function resolveContact(state, resolution, now = Date.now()) {
-  if (state?.status !== 'paused' || !['sent', 'skipped'].includes(resolution)) throw new Error('Pause a sequência para revisar o contato.');
+  if (state?.status !== 'paused' || !['sent', 'retry'].includes(resolution)) throw new Error('Contatos só são pulados quando o WhatsApp confirma que o número não existe.');
   if (!state.queue[state.cursor]) throw new Error('Não há contato para revisar.');
+  if (resolution === 'retry') {
+    Object.assign(state.queue[state.cursor], { status: 'pending', attempts: 0 });
+    state.notice = 'Contato mantido na fila para uma nova tentativa.';
+    return state;
+  }
   Object.assign(state.queue[state.cursor], { status: resolution, finishedAt: now });
   if (resolution === 'sent') state.notBefore = now + state.intervalMs;
   state.cursor++; state.job = null; state.nextAt = null;
@@ -130,5 +145,5 @@ export function matchesJob(url, job) {
 export function summarize(state) {
   const queue = state?.queue || [];
   return { total: queue.length, sent: queue.filter(r => r.status === 'sent').length,
-    skipped: queue.filter(r => r.status === 'skipped').length, processed: state?.cursor || 0 };
+    skipped: queue.filter(r => ['invalid', 'skipped'].includes(r.status)).length, processed: state?.cursor || 0 };
 }
