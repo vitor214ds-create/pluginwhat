@@ -31,7 +31,7 @@ Não é preciso instalar Node.js para usar. A extensão é Manifest V3, para Chr
 
 Cada contato recebe **uma** mensagem nessa sequência. Pular um contato mantém a distribuição original: o contato 4 sempre usa a mensagem 1. Uma nova sequência com a mesma lista é uma nova campanha e pode enviar novamente aos mesmos números.
 
-Mantenha o Chrome aberto e o computador ligado, conectado à internet e sem suspensão. Reserve a aba da campanha para os envios: a extensão abre cada conversa nessa mesma aba, e a página pode recarregar entre os contatos. Use outras abas para navegar. Não altere a conversa durante um envio.
+Mantenha o Chrome aberto e o computador ligado, conectado à internet e sem suspensão. Reserve a aba da campanha para os envios: a extensão usa Nova conversa para abrir cada contato dentro da mesma página, sem recarregar ou trocar o endereço da aba. Use outras abas para navegar. Não altere a conversa durante um envio.
 
 ## Pausar, retomar e revisar
 
@@ -47,7 +47,7 @@ Se o número não existir, o WhatsApp sair da conta, a conexão falhar, a interf
 
 ## Como o envio é confirmado
 
-A extensão usa o link de abertura de conversa com telefone e texto preenchido. Antes de clicar no botão de envio, confere o número do cabeçalho ou dos dados do contato e o texto no editor. Depois, aguarda uma nova mensagem de saída com a confirmação visual do WhatsApp (um ou dois tiques). Isso confirma envio pelo WhatsApp, **não leitura ou entrega ao destinatário**. Mensagens que continuam com o relógio não são marcadas como enviadas.
+A extensão pesquisa o telefone em Nova conversa, abre o resultado e preenche o editor dentro da página já carregada. Antes de clicar no botão de envio, confere o número do cabeçalho ou dos dados do contato e o texto no editor. Depois, aguarda uma nova mensagem de saída com a confirmação visual do WhatsApp (um ou dois tiques). Isso confirma envio pelo WhatsApp, **não leitura ou entrega ao destinatário**. Mensagens que continuam com o relógio não são marcadas como enviadas.
 
 O adaptador está em `whatsapp.js`. Seus seletores dependem da interface do WhatsApp Web, que pode mudar sem aviso. Se a interface não for reconhecida, o comportamento é pausar. Cabeçalhos com número e a gaveta de dados do contato são suportados; a confirmação de contatos salvos pode exigir atualização dos seletores em versões diferentes do WhatsApp.
 

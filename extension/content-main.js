@@ -1,6 +1,6 @@
-import { isLoggedIn, prepare, sendPrepared, delay } from './whatsapp.js';
+import { isLoggedIn, openConversation, prepare, sendPrepared } from './whatsapp.js';
 
-export async function start(initialUrl) {
+export async function start() {
   if (window.__pluginwhatLoaded) return;
   window.__pluginwhatLoaded = true;
   if (!document.documentElement) await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
@@ -19,40 +19,60 @@ export async function start(initialUrl) {
   host.hidden = !isLoggedIn(); toggle.setAttribute('aria-expanded', 'true');
   const observer = new MutationObserver(() => { host.hidden = !isLoggedIn(); });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  chrome.runtime.onMessage.addListener((request, _sender, reply) => {
+  const runner = createJobRunner({ host });
+  chrome.runtime.onMessage.addListener((request, sender, reply) => {
     if (request.type === 'PING') reply({ ready: isLoggedIn() });
     if (request.type === 'TOGGLE_PANEL') { frame.hidden = !frame.hidden; toggle.setAttribute('aria-expanded', String(!frame.hidden)); reply({ ok: true }); }
-  });
-  let cancelled = false, preparing = true, job;
-  // A real click or typing in WhatsApp while preparing/sending invalidates the operation.
-  const onInteraction = event => { if (event.isTrusted && !event.composedPath().includes(host)) cancelled = true; };
-  const onStorage = (changes, area) => {
-    const value = changes.pluginwhatCampaign?.newValue;
-    if (area === 'local' && changes.pluginwhatCampaign && (!value || value.status !== 'running' || value.job?.id !== job?.id)) cancelled = true;
-  };
-  try {
-    const ready = await chrome.runtime.sendMessage({ type: 'CONTENT_READY', initialUrl });
-    job = ready?.job;
-    if (!job || !ready.ok) return;
-    document.addEventListener('pointerdown', onInteraction, true);
-    document.addEventListener('keydown', onInteraction, true);
-    chrome.storage.onChanged.addListener(onStorage);
-    const snapshot = await prepare(job, { cancelled: () => cancelled });
-    const approved = await chrome.runtime.sendMessage({ type: 'PREPARED', jobId: job.id });
-    if (approved.ok && approved.approved) preparing = false;
-    if (!approved.ok || !approved.approved || cancelled) throw new Error(approved.error || 'Envio cancelado antes do clique.');
-    await sendPrepared(job, snapshot, { cancelled: () => cancelled });
-    await chrome.runtime.sendMessage({ type: 'RESULT', jobId: job.id, success: true });
-  } catch (error) {
-    if (job) {
-      try { await chrome.runtime.sendMessage({ type: 'RESULT', jobId: job.id, success: false, preparing, error: error.message }); }
-      catch { /* The persisted watchdog pauses an interrupted attempt. */ }
+    if (request.type === 'RUN_JOB' && sender.id === chrome.runtime.id) {
+      const accepted = !runner.busy && typeof request.jobId === 'string';
+      // Acknowledge immediately: authorization is requested after the worker releases its lock.
+      reply({ accepted });
+      if (accepted) void runner.run(request.jobId);
     }
-  } finally {
-    document.removeEventListener('pointerdown', onInteraction, true);
-    document.removeEventListener('keydown', onInteraction, true);
-    chrome.storage.onChanged.removeListener(onStorage);
-  }
-  // Yield once so the panel can render even on a busy chat.
-  await delay(0);
+  });
+}
+
+export function createJobRunner({ host, doc = document, api = chrome,
+  actions = { openConversation, prepare, sendPrepared } }) {
+  let activeJobId = null;
+  return {
+    get busy() { return activeJobId !== null; },
+    async run(jobId) {
+      if (activeJobId !== null) return;
+      activeJobId = jobId;
+      let cancelled = false, preparing = true, job;
+      // A real click or typing in WhatsApp while preparing/sending invalidates the operation.
+      const onInteraction = event => { if (event.isTrusted && !event.composedPath().includes(host)) cancelled = true; };
+      const onStorage = (changes, area) => {
+        const value = changes.pluginwhatCampaign?.newValue;
+        if (area === 'local' && changes.pluginwhatCampaign && (!value || value.status !== 'running' || value.job?.id !== jobId)) cancelled = true;
+      };
+      doc.addEventListener('pointerdown', onInteraction, true);
+      doc.addEventListener('keydown', onInteraction, true);
+      api.storage.onChanged.addListener(onStorage);
+      try {
+        const ready = await api.runtime.sendMessage({ type: 'CONTENT_READY', jobId });
+        job = ready?.job;
+        if (!job || !ready.ok || cancelled) return;
+        const options = { doc, cancelled: () => cancelled };
+        await actions.openConversation(job, options);
+        const snapshot = await actions.prepare(job, { ...options, fillMessage: true });
+        const approved = await api.runtime.sendMessage({ type: 'PREPARED', jobId: job.id });
+        if (approved.ok && approved.approved) preparing = false;
+        if (!approved.ok || !approved.approved || cancelled) throw new Error(approved.error || 'Envio cancelado antes do clique.');
+        await actions.sendPrepared(job, snapshot, options);
+        await api.runtime.sendMessage({ type: 'RESULT', jobId: job.id, success: true });
+      } catch (error) {
+        if (job) {
+          try { await api.runtime.sendMessage({ type: 'RESULT', jobId: job.id, success: false, preparing, error: error.message }); }
+          catch { /* The persisted watchdog pauses an interrupted attempt. */ }
+        }
+      } finally {
+        doc.removeEventListener('pointerdown', onInteraction, true);
+        doc.removeEventListener('keydown', onInteraction, true);
+        api.storage.onChanged.removeListener(onStorage);
+        activeJobId = null;
+      }
+    }
+  };
 }

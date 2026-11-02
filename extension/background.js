@@ -1,5 +1,5 @@
 import { STATE_KEY, createCampaign, pauseCampaign, resumeCampaign, resolveContact,
-  completeContact, jobUrl, matchesJob } from './core.js';
+  completeContact } from './core.js';
 
 const ALARM = 'pluginwhat-next';
 let serial = Promise.resolve();
@@ -55,7 +55,8 @@ async function dispatch() {
       phase: 'opening', deadline: Date.now() + 90000 };
     state.notice = `Abrindo contato ${state.cursor + 1} de ${state.queue.length}.`;
     await save(state);
-    await chrome.tabs.update(state.tabId, { url: jobUrl(state.job) });
+    const accepted = await chrome.tabs.sendMessage(state.tabId, { type: 'RUN_JOB', jobId: state.job.id }, { frameId: 0 });
+    if (!accepted?.accepted) throw new Error('O painel não conseguiu iniciar o contato nesta aba. Confira o WhatsApp e retome.');
   } catch (error) { await save(pauseCampaign(state, error.message)); }
 }
 
@@ -65,7 +66,7 @@ export async function handle(request, sender) {
   if (request.type === 'CONTENT_READY') {
     if (!state?.job || state.status !== 'running' || state.job.phase !== 'opening' ||
         sender.tab?.id !== state.tabId || sender.frameId !== 0 || !isWhatsApp(sender.url) ||
-        !matchesJob(request.initialUrl, state.job)) return { job: null };
+        request.jobId !== state.job.id || state.job.deadline <= Date.now()) return { job: null };
     state.job.phase = 'preparing'; state.job.documentId = sender.documentId;
     await save(state); return { job: state.job };
   }
@@ -145,7 +146,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 chrome.action.onClicked.addListener(async tab => {
   if (isWhatsApp(tab.url)) {
     try { await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' }, { frameId: 0 }); }
-    catch { await chrome.tabs.reload(tab.id); }
+    catch (error) { console.warn('O painel não está disponível nesta aba do WhatsApp.', error); }
   } else await chrome.tabs.create({ url: 'https://web.whatsapp.com/' });
 });
 chrome.runtime.onStartup.addListener(() => void exclusive(async () => {
