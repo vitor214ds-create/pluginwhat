@@ -9,7 +9,8 @@ const messages = ['Primeira mensagem\nOlá 🌱', 'Segunda mensagem', 'Terceira 
 const key = 'pluginwhatCampaign';
 let generation = 0;
 
-async function harness(t, { invalid = [], empty = [], noAck = false, dropReply = false } = {}) {
+async function harness(t, { invalid = [], empty = [], noAck = false, dropReply = false, contactNames = {}, templateMessages = messages,
+  modernEditor = false, semanticInfo = false, pointerRequired = false, editorUnavailable = false } = {}) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000000 });
   const dom = new JSDOM('<!doctype html><button aria-label="Nova conversa">Nova conversa</button><div id="pane-side"></div><section id="main"></section>', { url: 'https://web.whatsapp.com/' });
   const doc = dom.window.document, sent = [], alarms = new Map(), events = {}, storageListeners = new Set(), local = {}, session = {};
@@ -17,17 +18,41 @@ async function harness(t, { invalid = [], empty = [], noAck = false, dropReply =
   Object.defineProperty(dom.window.HTMLElement.prototype, 'innerText', { get() { return this.textContent; }, set(text) { this.textContent = text; } });
   doc.execCommand = (command, _show, text) => {
     assert.equal(command, 'insertText'); const box = doc.activeElement; box.textContent = text;
+    if (modernEditor || editorUnavailable) { box.textContent = ''; return false; }
     box.dispatchEvent(new dom.window.Event('input', { bubbles: true })); return true;
   };
+  if (modernEditor) {
+    dom.window.DataTransfer = class { data = {}; setData(type, value) { this.data[type] = value; } getData(type) { return this.data[type] || ''; } };
+    dom.window.ClipboardEvent = class extends dom.window.Event { constructor(type, options) { super(type, options); this.clipboardData = options.clipboardData; } };
+  }
   const create = (tag, attrs = {}, text = '') => { const node = doc.createElement(tag); for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value); node.textContent = text; return node; };
   function chat(phone) {
     const main = doc.querySelector('#main'); main.replaceChildren();
-    const header = create('header'), title = create('span', { title: '+' + phone, dir: 'auto' }, '+' + phone), presence = create('span', {}, 'online');
+    const label = contactNames[phone] || '+' + phone;
+    const header = create('header'), title = create('span', { title: label, dir: 'auto' }, label), presence = create('span', {}, 'online');
     header.append(title, '\n', presence); main.append(header);
-    const footer = create('footer'), box = create('div', { contenteditable: 'true', role: 'textbox', tabindex: '0' });
-    const button = create('button', { 'aria-label': 'Enviar' }, 'Enviar'); footer.append(box, button); main.append(footer);
+    title.addEventListener('click', () => {
+      const drawer = create('aside', semanticInfo ? {} : { 'data-testid': 'drawer-right' });
+      const heading = create('header'), close = create('button', { 'aria-label': 'Fechar' }, 'Fechar');
+      heading.append(create('h2', {}, 'Dados do contato'), close); close.addEventListener('click', () => drawer.remove());
+      drawer.append(heading, create('div', {}, 'Telefone: \u200e+' + phone)); doc.body.append(drawer);
+    });
+    const footer = create(modernEditor ? 'div' : 'footer', modernEditor ? { role: 'contentinfo' } : {}), box = create('div', { contenteditable: 'true', role: 'textbox', tabindex: '0', ...(modernEditor ? { 'data-lexical-editor': 'true' } : {}) });
+    const button = create('button', { 'aria-label': modernEditor ? 'Enviar mensagem' : 'Enviar' }, 'Enviar'); footer.append(box, button); main.append(footer);
+    let armed = false, registeredText = '';
+    button.addEventListener('mousedown', () => { armed = true; });
+    if (modernEditor) {
+      button.setAttribute('aria-disabled', 'true');
+      box.addEventListener('paste', event => {
+        event.preventDefault(); if (editorUnavailable) return;
+        registeredText = event.clipboardData.getData('text/plain'); box.textContent = registeredText; button.setAttribute('aria-disabled', 'false');
+      });
+    }
     button.addEventListener('click', () => {
-      const text = box.textContent;
+      if (pointerRequired && !armed) return;
+      const text = modernEditor ? registeredText : box.textContent;
+      if (!text || button.getAttribute('aria-disabled') === 'true') return;
+      armed = false;
       sent.push({ phone, text, at: Date.now() }); box.textContent = '';
       // Reproduce the reported failure: presence changes immediately after the click.
       presence.textContent = 'digitando…';
@@ -107,7 +132,7 @@ async function harness(t, { invalid = [], empty = [], noAck = false, dropReply =
       for (let flush = 0; flush < 30; flush++) await Promise.resolve();
     }
   }
-  const start = async () => { const response = await invoke({ type: 'START', config: { contacts: phones, messages, intervalSeconds: 120 } }, panelSender); assert.equal(response.ok, true); await advance(2000); };
+  const start = async () => { const response = await invoke({ type: 'START', config: { contacts: phones, messages: templateMessages, intervalSeconds: 120 } }, panelSender); assert.equal(response.ok, true); await advance(2000); };
   const restartWorker = async () => { worker = await import(`../extension/background.js?generation=${generation++}`); await worker.exclusive(async () => {}); };
   t.after(() => { scheduler.stop(); dom.window.close(); t.mock.timers.reset(); });
   return { doc, sent, local, alarms, chrome, start, advance, restartWorker, state: () => local[key] };
@@ -166,4 +191,19 @@ test('an old matching message re-rendered under the same ID cannot confirm a new
   });
   const operation = sendPrepared({ phone: phones[0], message: messages[0] }, snapshot, { doc: f.doc, timeout: 500 });
   const rejected = assert.rejects(operation, /verificar/); await f.advance(1000); await rejected;
+});
+test('modern controlled editor, semantic contact info and pointer-based send process personalized and unnamed contacts automatically', async t => {
+  const f = await harness(t, { modernEditor: true, semanticInfo: true, pointerRequired: true,
+    contactNames: { [phones[0]]: 'Maria da Silva', [phones[2]]: 'João 🌱', [phones[3]]: 'Ana $&' },
+    templateMessages: ['Bom dia (nome), tudo bem?', 'Olá (NOME)!', 'Boa tarde, ( nome ).'] });
+  await f.start(); await f.advance(370000);
+  assert.equal(f.state().status, 'completed'); assert.equal(f.sent.length, 4);
+  assert.deepEqual(f.sent.map(row => row.text), ['Bom dia Maria da Silva, tudo bem?', 'Olá!', 'Boa tarde, João 🌱.', 'Bom dia Ana $&, tudo bem?']);
+  assert.deepEqual(f.state().queue.map(row => row.contactName), ['Maria da Silva', '', 'João 🌱', 'Ana $&']);
+  assert.ok(f.sent.slice(1).every((row, i) => row.at - f.sent[i].at >= 120000));
+});
+test('an unavailable editor produces a precise filling error and never pretends the empty message was sent', async t => {
+  const f = await harness(t, { modernEditor: true, editorUnavailable: true }); await f.start(); await f.advance(20000);
+  assert.equal(f.sent.length, 0); assert.equal(f.state().status, 'paused'); assert.equal(f.state().cursor, 0);
+  assert.equal(f.state().queue[0].errorCode, 'EDITOR_INSERT_FAILED'); assert.equal(f.state().queue[0].lastStage, 'filling');
 });

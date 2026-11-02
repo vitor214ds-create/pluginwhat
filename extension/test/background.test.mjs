@@ -64,9 +64,11 @@ test('two simultaneous START commands cannot create overlapping campaigns', asyn
 });
 test('a successful ack advances once and the alarm does not open another conversation before the interval', async () => {
   await open(); const jobId = state().job.id;
+  local[STATE_KEY].queue[0].errorCode = 'PREVIOUS_ERROR';
   await call('PREPARED', { jobId }, content);
   const now = Date.now(); await call('RESULT', { jobId, success: true, evidence: { confirmed: true } }, content);
   assert.equal(state().cursor, 1); assert.equal(state().queue[0].status, 'sent');
+  assert.equal(state().queue[0].errorCode, '');
   assert.ok(state().nextAt >= now + 90000);
   events.alarm({ name: 'pluginwhat-next' }); await flush();
   assert.equal(runs.length, 1);
@@ -119,4 +121,12 @@ test('a claimed success without outgoing acknowledgement cannot advance the queu
   await open(); const jobId = state().job.id; await call('PREPARED', { jobId }, content);
   await call('RESULT', { jobId, success: true, clicked: true }, content);
   assert.equal(state().cursor, 0); assert.equal(state().queue[0].status, 'uncertain');
+});
+
+test('the authorized send uses the resolved name and rejects a message different from the configured template', async () => {
+  await open(); let jobId = state().job.id;
+  local[STATE_KEY].job.message = 'Bom dia (nome), tudo bem?';
+  await assert.rejects(call('PREPARED', { jobId, contactName: 'Maria', message: 'Outro texto' }, content), /não corresponde/);
+  await call('PREPARED', { jobId, contactName: 'Maria', message: 'Bom dia Maria, tudo bem?' }, content);
+  assert.equal(state().job.message, 'Bom dia Maria, tudo bem?'); assert.equal(state().queue[0].contactName, 'Maria');
 });

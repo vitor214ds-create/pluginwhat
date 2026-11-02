@@ -1,3 +1,4 @@
+import { personalizeMessage, MAX_TEXT_LENGTH } from './core.js';
 // DOM adapter only: no private WhatsApp APIs, remote scripts or session access.
 export const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function normalizeText(text) { return String(text || '').replace(/\r\n/g, '\n').replace(/\u00a0/g, ' ').trim(); }
@@ -16,13 +17,19 @@ export function readText(node) {
 function failure(code, message, retryable = false) { return Object.assign(new Error(message), { code, retryable }); }
 export function isLoggedIn(doc = document) { return Boolean(doc.querySelector('#pane-side, [data-testid="chat-list"]')); }
 export function composer(doc = document) {
-  return doc.querySelector('#main footer [contenteditable="true"][role="textbox"]');
+  const original = doc.querySelector('#main footer [contenteditable="true"][role="textbox"]');
+  if (visible(original)) return original;
+  const boxes = [...(doc.querySelectorAll?.('#main [contenteditable="true"]') || [])].filter(node => visible(node) && !node.closest('header, [role="dialog"]'));
+  return boxes.find(node => node.matches('[data-lexical-editor="true"], [data-testid="conversation-compose-box-input"], [data-tab="10"]') || /digite uma mensagem|type a message|escreva uma mensagem/i.test(node.getAttribute('aria-label') || '')) ||
+    (boxes.length === 1 ? boxes[0] : null);
 }
 function visible(element) { return Boolean(element && element.isConnected && element.getClientRects().length); }
 function phoneIn(text, phone) {
   // Match a complete phone-looking field, never a substring or a group participant.
-  return String(text || '').split(/\n/).some(line =>
-    /^\+?[\d\s().-]+$/.test(line.trim()) && line.replace(/\D/g, '') === phone);
+  const clean = String(text || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\u00a0/g, ' ');
+  return clean.split(/\n/).some(line =>
+    /^\+?[\d\s().-]+$/.test(line.trim()) && line.replace(/\D/g, '') === phone) ||
+    (clean.match(/\+?\d[\d ().-]{6,}\d/g) || []).some(number => number.replace(/\D/g, '') === phone);
 }
 function titleOf(header) {
   const title = header?.querySelector('[data-testid="conversation-info-header-chat-title"], span[title][dir="auto"], span[title]');
@@ -32,12 +39,35 @@ function sameConversation(snapshot, doc) {
   const main = doc.querySelector('#main'), header = main?.querySelector('header');
   return visible(main) && visible(header) && titleOf(header) === snapshot.title;
 }
+function closeInfoButton(drawer) {
+  return drawer.querySelector('button[aria-label="Fechar"], [role="button"][aria-label="Fechar"], button[aria-label="Close"], [role="button"][aria-label="Close"], button[aria-label="Voltar"], [role="button"][aria-label="Voltar"], button[aria-label="Back"]') ||
+    drawer.querySelector('[data-icon="x"], [data-icon="x-alt"], [data-icon="back"], [data-icon="wds-ic-x"], [data-icon="wds-ic-arrow-left"]')?.closest('button, [role="button"]');
+}
 function infoDrawer(doc) {
-  return doc.querySelector('[data-testid="drawer-right"], [data-testid="contact-info-drawer"], [role="dialog"][aria-label="Contact info"], [role="region"][aria-label="Dados do contato"]');
+  const known = doc.querySelector('[data-testid="drawer-right"], [data-testid="contact-info-drawer"], [role="dialog"][aria-label="Contact info"], [role="region"][aria-label="Dados do contato"]');
+  if (visible(known)) return known;
+  for (const heading of doc.querySelectorAll?.('h1, h2, [role="heading"], span') || []) {
+    if (!visible(heading) || !/^(dados do contato|informações do contato|contact info|contact information)$/i.test(normalizeText(readText(heading)))) continue;
+    for (let node = heading.parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
+      if (node.querySelector('#main')) break;
+      if (closeInfoButton(node) && /\+?\d[\d ().-]{6,}\d/.test(readText(node))) return node;
+    }
+  }
+  return null;
+}
+function usableName(value) {
+  const name = normalizeText(value).replace(/^~/, '').trim();
+  if (!name || !/\p{L}/u.test(name) || /^(online|digitando.*|typing.*|dados do contato|contact info|informações do contato|whatsapp)$/i.test(name)) return '';
+  return name.replace(/[\r\n\t]+/g, ' ').slice(0, 160);
 }
 export function sendButton(doc = document) {
-  const icon = doc.querySelector('#main footer [data-icon="send"], #main footer [data-icon="wds-ic-send-filled"]');
-  return icon?.closest('button, [role="button"]') || doc.querySelector('#main footer button[aria-label="Enviar"], #main footer button[aria-label="Send"], #main footer [role="button"][aria-label="Enviar"], #main footer [role="button"][aria-label="Send"]');
+  const icon = doc.querySelector('#main footer [data-icon="send"], #main footer [data-icon="wds-ic-send-filled"], #main [data-icon="send"], #main [data-icon="wds-ic-send-filled"]');
+  const iconButton = icon?.closest('button, [role="button"]');
+  if (visible(iconButton)) return iconButton;
+  const labeled = doc.querySelector('#main footer button[aria-label="Enviar"], #main footer button[aria-label="Send"], #main footer [role="button"][aria-label="Enviar"], #main footer [role="button"][aria-label="Send"]');
+  if (visible(labeled)) return labeled;
+  return [...(doc.querySelectorAll?.('#main [data-icon="send"], #main [data-icon="wds-ic-send-filled"]') || [])].map(node => node.closest('button, [role="button"]')).find(visible) ||
+    [...(doc.querySelectorAll?.('#main button, #main [role="button"]') || [])].find(node => visible(node) && /^(enviar|enviar mensagem|send|send message)$/i.test(node.getAttribute('aria-label') || ''));
 }
 function checkCancelled(cancelled) { if (cancelled()) throw failure('CANCELLED', 'A conversa foi alterada durante a preparação. Sequência pausada.'); }
 async function until(check, timeout, cancelled) {
@@ -66,6 +96,29 @@ function replaceEditable(box, text, doc) {
     selection.removeAllRanges();
   }
 }
+async function fillComposer(box, text, doc, cancelled) {
+  checkCancelled(cancelled);
+  box.focus();
+  const view = doc.defaultView;
+  // Modern rich-text editors handle paste themselves. No system clipboard access is used.
+  if (view?.DataTransfer && view?.ClipboardEvent && box.dispatchEvent) {
+    const data = new view.DataTransfer(); data.setData('text/plain', text);
+    box.dispatchEvent(new view.ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true, composed: true }));
+    await delay(250); checkCancelled(cancelled);
+  }
+  if (normalizeText(readText(box)) !== normalizeText(text)) {
+    try { replaceEditable(box, text, doc); }
+    catch (error) { if (!view?.InputEvent) throw failure('EDITOR_INSERT_FAILED', 'O contato abriu, mas o editor não aceitou o texto da mensagem.', true); }
+    if (view?.InputEvent && box.dispatchEvent) {
+      box.dispatchEvent(new view.InputEvent('input', { inputType: 'insertText', data: text, bubbles: true, composed: true }));
+    }
+  }
+  if (normalizeText(readText(box)) !== normalizeText(text) && view?.InputEvent && box.dispatchEvent) {
+    box.dispatchEvent(new view.InputEvent('beforeinput', { inputType: 'insertReplacementText', data: text, bubbles: true, cancelable: true, composed: true }));
+    await delay(250); checkCancelled(cancelled);
+  }
+  if (normalizeText(readText(box)) !== normalizeText(text)) throw failure('EDITOR_INSERT_FAILED', 'O contato abriu, mas o campo de mensagem continuou vazio ou não aceitou o texto. Nenhum envio foi realizado.', true);
+}
 function newChatButton(doc) {
   const button = doc.querySelector('[aria-label="Nova conversa"], [title="Nova conversa"], [aria-label="New chat"], [title="New chat"]');
   if (visible(button)) return button;
@@ -91,7 +144,7 @@ function contactResultScope(search, doc) {
   }
   return null;
 }
-export async function openConversation(job, { doc = document, cancelled = () => false, timeout = 20000 } = {}) {
+export async function openConversation(job, { doc = document, cancelled = () => false, timeout = 20000, onStage = async () => {} } = {}) {
   checkCancelled(cancelled);
   const button = newChatButton(doc);
   if (visible(button)) button.click();
@@ -115,7 +168,12 @@ export async function openConversation(job, { doc = document, cancelled = () => 
   }, timeout, cancelled);
   checkCancelled(cancelled);
   result.click();
-  await until(() => (!result.isConnected || !visible(result)) && visible(composer(doc)), timeout, cancelled);
+  await onStage('editor');
+  try { await until(() => (!result.isConnected || !visible(result)) && visible(composer(doc)), timeout, cancelled); }
+  catch (error) {
+    if (error.code === 'CANCELLED') throw error;
+    throw failure('EDITOR_NOT_FOUND', 'O contato abriu, mas o campo de mensagem não foi localizado nesta versão do WhatsApp.', true);
+  }
 }
 
 export function unregisteredEvidence(doc, job, scope) {
@@ -133,7 +191,8 @@ export function unregisteredEvidence(doc, job, scope) {
   return null;
 }
 
-export async function prepare(job, { doc = document, cancelled = () => false, timeout = 60000, fillMessage = false } = {}) {
+export async function prepare(job, { doc = document, cancelled = () => false, timeout = 60000, fillMessage = false, onStage = async () => {} } = {}) {
+  await onStage('verifying');
   const main = await until(() => {
     const root = doc.querySelector('#main');
     const box = composer(doc);
@@ -142,7 +201,8 @@ export async function prepare(job, { doc = document, cancelled = () => false, ti
   }, timeout, cancelled);
   const header = main.querySelector('header');
   if (!header) throw new Error('Cabeçalho da conversa não encontrado.');
-  let verified = phoneIn(header.innerText, job.phone);
+  let contactName = usableName(titleOf(header));
+  let verified = phoneIn(readText(header), job.phone);
   if (!verified) {
     const trigger = header.querySelector('[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-info-header"], [title]') || header.querySelector('[role="button"]');
     if (!trigger) throw new Error('Não foi possível abrir os dados do contato para conferir o número.');
@@ -151,27 +211,40 @@ export async function prepare(job, { doc = document, cancelled = () => false, ti
       const node = infoDrawer(doc);
       return visible(node) && node;
     }, Math.min(timeout, 8000), cancelled);
-    verified = phoneIn(drawer.innerText, job.phone);
-    const close = drawer.querySelector('button[aria-label="Fechar"], [role="button"][aria-label="Fechar"], button[aria-label="Close"], [role="button"][aria-label="Close"]') ||
-      drawer.querySelector('[data-icon="x"], [data-icon="x-alt"], [data-icon="back"]')?.closest('button, [role="button"]');
+    verified = phoneIn(readText(drawer), job.phone);
+    if (!contactName) {
+      const profile = drawer.querySelector('[data-testid="contact-info-name"], [data-testid="contact-info-drawer-name"]') ||
+        [...(drawer.querySelectorAll?.('span') || [])].find(node => /^~\s*\p{L}/u.test(normalizeText(readText(node))));
+      contactName = usableName(readText(profile));
+    }
+    const close = closeInfoButton(drawer);
     if (close) close.click();
     if (!verified) throw failure('RECIPIENT_MISMATCH', 'O número exibido nos dados do contato não corresponde ao destinatário. Nenhuma mensagem foi enviada.');
     if (!close) throw new Error('Feche os dados do contato e retome a sequência.');
   }
   checkCancelled(cancelled);
+  const message = personalizeMessage(job.message, contactName);
+  if (!message || message.length > MAX_TEXT_LENGTH) throw failure('PERSONALIZED_MESSAGE_INVALID', 'A mensagem personalizada ficou vazia ou ultrapassou 3.000 caracteres. Ajuste o texto antes de continuar.');
   if (fillMessage) {
+    await onStage('filling'); checkCancelled(cancelled);
     const box = composer(doc);
     if (!visible(box)) throw new Error('O editor da conversa não foi encontrado.');
     const existing = normalizeText(readText(box));
-    if (existing && existing !== normalizeText(job.message)) throw new Error('Este contato já tem um rascunho diferente. Confira a conversa antes de retomar.');
-    if (existing !== normalizeText(job.message)) replaceEditable(box, job.message, doc);
-    await until(() => normalizeText(readText(composer(doc))) === normalizeText(job.message) && visible(sendButton(doc)), Math.min(timeout, 5000), cancelled);
+    if (existing && existing !== normalizeText(message)) throw new Error('Este contato já tem um rascunho diferente. Confira a conversa antes de retomar.');
+    if (existing !== normalizeText(message)) await fillComposer(box, message, doc, cancelled);
+    try {
+      await until(() => normalizeText(readText(composer(doc))) === normalizeText(message) && visible(sendButton(doc)) && !sendButton(doc).disabled && sendButton(doc).getAttribute?.('aria-disabled') !== 'true', Math.min(timeout, 8000), cancelled);
+    } catch (error) {
+      if (error.code === 'CANCELLED') throw error;
+      throw failure('EDITOR_NOT_READY', 'O texto foi preenchido, mas o WhatsApp não habilitou o botão Enviar. O contato permanece pendente.', true);
+    }
   }
   const box = composer(doc), button = sendButton(doc);
-  if (!visible(box) || !visible(button) || normalizeText(readText(box)) !== normalizeText(job.message)) {
+  if (!visible(box) || !visible(button) || normalizeText(readText(box)) !== normalizeText(message)) {
     throw new Error('A mensagem ou o botão de envio mudou. Confira a conversa e retome.');
   }
-  return { main, header, title: titleOf(header), box, button };
+  await onStage('ready');
+  return { main, header, title: titleOf(header), box, button, message, contactName };
 }
 
 function messageId(node) {
@@ -181,7 +254,8 @@ function outgoing(main) { return [...main.querySelectorAll('.message-out')]; }
 function messageMatches(node, text) {
   return [...node.querySelectorAll('[data-testid="msg-text"], .selectable-text')].some(part => normalizeText(readText(part)) === normalizeText(text));
 }
-export async function sendPrepared(job, snapshot, { doc = document, cancelled = () => false, timeout = 60000, onClick = () => {} } = {}) {
+export async function sendPrepared(job, snapshot, { doc = document, cancelled = () => false, timeout = 60000, onClick = () => {}, onStage = async () => {} } = {}) {
+  await onStage('clicking');
   checkCancelled(cancelled);
   const main = doc.querySelector('#main'), box = composer(doc), button = sendButton(doc);
   if (!sameConversation(snapshot, doc) || !visible(box) || !visible(button) ||
@@ -192,7 +266,16 @@ export async function sendPrepared(job, snapshot, { doc = document, cancelled = 
   const beforeMatches = before.filter(node => messageMatches(node, job.message));
   let acknowledgement;
   onClick();
+  const view = doc.defaultView;
+  // Follow one normal pointer activation sequence; never send Enter or retry a click.
+  if (view?.MouseEvent && button.dispatchEvent) {
+    if (view.PointerEvent) button.dispatchEvent(new view.PointerEvent('pointerdown', { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 }));
+    button.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    if (view.PointerEvent) button.dispatchEvent(new view.PointerEvent('pointerup', { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0 }));
+    button.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true, button: 0 }));
+  }
   button.click(); // Exactly one click. Never retry an ambiguous send.
+  await onStage('confirming');
   await until(() => {
     const currentMain = doc.querySelector('#main'), currentHeader = currentMain?.querySelector('header');
     if (!visible(currentMain) || !visible(currentHeader) || !titleOf(currentHeader)) return false;

@@ -2,6 +2,8 @@
 
 Extensão para Chrome com painel dentro do WhatsApp Web: importação de contatos TXT, três mensagens em rodízio e intervalo configurável entre contatos.
 
+Use `(nome)` no texto para inserir o nome exibido pelo contato, por exemplo: `Bom dia (nome), tudo bem?`. A extensão confere e personaliza cada mensagem antes do envio, e o painel mostra a etapa atual e os detalhes de uma eventual falha.
+
 ## Instalar a extensão
 
 O plugin pronto para carregar está em [`extension/`](./extension/). Veja o [guia completo em português](./extension/README.md).

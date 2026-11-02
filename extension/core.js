@@ -5,6 +5,14 @@ export const MAX_INTERVAL = 86400;
 export const STATE_KEY = 'pluginwhatCampaign';
 export const DRAFT_KEY = 'pluginwhatDraft';
 
+export function personalizeMessage(template, contactName = '') {
+  const name = String(contactName).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 160);
+  const original = String(template);
+  if (!/\(\s*nome\s*\)/i.test(original)) return original.trim();
+  const rendered = original.replace(/\(\s*nome\s*\)/gi, () => name);
+  return name ? rendered.trim() : rendered.replace(/[ \t]+([,!?;:.])/g, '$1').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
 export function normalizePhone(raw, countryCode = '55') {
   const input = String(raw).trim();
   if (!input || !/^\+?[\d\s().-]+$/.test(input)) return null;

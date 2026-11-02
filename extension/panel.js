@@ -71,7 +71,7 @@ function renderState() {
   $('notice').textContent = state?.notice || 'Importe sua lista para montar a sequência.';
   const current = state?.queue[state.cursor];
   $('current').hidden = !current || !['running', 'paused'].includes(state.status);
-  $('current').textContent = current ? `Contato ${state.cursor + 1} · +${current.phone} · Mensagem ${current.template + 1}` : '';
+  $('current').textContent = current ? `Contato ${state.cursor + 1} · ${current.contactName ? current.contactName + ' · ' : ''}+${current.phone} · Mensagem ${current.template + 1}` : '';
   $('review').hidden = state?.status !== 'paused' || !current;
   $('mark-sent').hidden = current?.status !== 'uncertain';
   $('retry').hidden = current?.status !== 'uncertain';
@@ -84,7 +84,7 @@ function renderState() {
   (state?.queue || []).slice(begin, begin + 50).forEach((row, offset) => {
     const li = document.createElement('li'); li.dataset.status = row.status;
     if (row.detail) li.title = row.detail;
-    const number = document.createElement('span'); number.textContent = `${begin + offset + 1}. +${row.phone} · M${row.template + 1}`;
+    const number = document.createElement('span'); number.textContent = `${begin + offset + 1}. ${row.contactName ? row.contactName + ' · ' : ''}+${row.phone} · M${row.template + 1}`;
     const status = document.createElement('span'); status.textContent = rowStatuses[row.status] || row.status;
     li.append(number, status); $('history-list').append(li);
   });
@@ -144,8 +144,9 @@ $('clear').addEventListener('click', async () => {
 });
 $('export').addEventListener('click', () => {
   if (!state) return;
-  const lines = ['numero,mensagem,status,concluido_em'];
-  state.queue.forEach(row => lines.push(`${row.phone},${row.template + 1},${row.status},${row.finishedAt ? new Date(row.finishedAt).toISOString() : ''}`));
+  const cell = value => { let text = String(value || ''); if (/^[=+\-@]/.test(text)) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; };
+  const lines = ['numero,mensagem,status,concluido_em,nome,etapa,codigo,detalhe'];
+  state.queue.forEach(row => lines.push([row.phone, row.template + 1, row.status, row.finishedAt ? new Date(row.finishedAt).toISOString() : '', row.contactName, row.lastStage, row.errorCode, row.detail].map(cell).join(',')));
   const url = URL.createObjectURL(new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a'); link.href = url; link.download = 'pluginwhat-registro.csv'; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);

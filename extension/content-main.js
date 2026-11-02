@@ -104,13 +104,15 @@ export function createJobRunner({ host, doc = document, api = chrome,
         const ready = await api.runtime.sendMessage({ type: 'CONTENT_READY', jobId });
         job = ready?.job;
         if (!job || !ready.ok || cancelled) return;
-        const options = { doc, cancelled: () => cancelled, onClick: () => { clicked = true; } };
+        const options = { doc, cancelled: () => cancelled, onClick: () => { clicked = true; },
+          onStage: async stage => { try { await api.runtime.sendMessage({ type: 'STAGE', jobId: job.id, stage }); } catch { /* Progress must not interrupt a send. */ } } };
         await actions.openConversation(job, options);
         const snapshot = await actions.prepare(job, { ...options, fillMessage: true });
-        const approved = await api.runtime.sendMessage({ type: 'PREPARED', jobId: job.id });
+        const resolvedJob = { ...job, message: snapshot.message ?? job.message };
+        const approved = await api.runtime.sendMessage({ type: 'PREPARED', jobId: job.id, message: resolvedJob.message, contactName: snapshot.contactName || '' });
         if (approved.ok && approved.approved) preparing = false;
         if (!approved.ok || !approved.approved || cancelled) throw new Error(approved.error || 'Envio cancelado antes do clique.');
-        const evidence = await actions.sendPrepared(job, snapshot, options);
+        const evidence = await actions.sendPrepared(resolvedJob, snapshot, options);
         if (!evidence?.confirmed) throw new Error('O WhatsApp não confirmou o envio da mensagem.');
         result = { type: 'RESULT', jobId: job.id, success: true, evidence };
         await report(api, result);

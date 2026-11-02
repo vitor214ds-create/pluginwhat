@@ -1,10 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseContacts, normalizePhone, validateConfig, createCampaign, completeContact, skipUnregisteredContact,
+import { personalizeMessage, parseContacts, normalizePhone, validateConfig, createCampaign, completeContact, skipUnregisteredContact,
   pauseCampaign, resumeCampaign, resolveContact, jobUrl, matchesJob } from '../core.js';
 
 const config = { contacts: ['5511912345678', '5521912345678', '5531912345678', '5541912345678', '5551912345678', '5561912345678', '5571912345678'],
   messages: ['Olá 1!\nTudo bem?', 'Olá 2! 🌱', 'Olá 3!'], intervalSeconds: 90 };
+
+test('name tokens are case-insensitive, repeated and treated as plain text', () => {
+  assert.equal(personalizeMessage('Bom dia (nome), tudo bem? (NOME)!', 'Ana $&'), 'Bom dia Ana $&, tudo bem? Ana $&!');
+  assert.equal(personalizeMessage('Olá ( nome )!', 'João da Silva'), 'Olá João da Silva!');
+});
+test('unknown names do not leave a phone number or raw placeholder in the greeting', () => {
+  assert.equal(personalizeMessage('Bom dia (nome), tudo bem?', ''), 'Bom dia, tudo bem?');
+  assert.equal(personalizeMessage('Olá (nome)!', ''), 'Olá!');
+  assert.equal(personalizeMessage('  Texto  sem token\nsegunda linha  ', 'Maria'), 'Texto  sem token\nsegunda linha');
+});
 
 test('TXT normalizes Brazilian numbers, international prefixes, BOM and duplicate formats', () => {
   const parsed = parseContacts('\uFEFF(11) 91234-5678\r\n+55 11 91234-5678\n005521912345678\n+1 (202) 555-0100\n\n');

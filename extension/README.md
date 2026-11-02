@@ -33,6 +33,12 @@ Cada contato recebe **uma** mensagem nessa sequência. Somente números que o Wh
 
 Mantenha o Chrome aberto e o computador ligado, conectado à internet e sem suspensão. Reserve a aba da campanha para os envios: a extensão usa Nova conversa para abrir cada contato dentro da mesma página, sem recarregar ou trocar o endereço da aba. Use outras abas para navegar. Não altere a conversa durante um envio.
 
+## Personalização com o nome
+
+Escreva `(nome)` em qualquer uma das três mensagens. Exemplo: `Bom dia (nome), tudo bem?`. Se o contato aparece como **Maria da Silva** no WhatsApp, o texto enviado será `Bom dia Maria da Silva, tudo bem?`.
+
+O nome é lido novamente em cada conversa. `(NOME)` e `( nome )` também funcionam, inclusive quando o marcador aparece várias vezes. O nome completo é usado como texto, sem executar HTML ou comandos. Se o WhatsApp mostrar somente o telefone e não houver nome disponível, o marcador é removido: `Bom dia, tudo bem?`. A extensão não inventa nomes e não consulta serviços externos para identificá-los. O limite de 3.000 caracteres também é conferido depois da personalização.
+
 ## Pausar, retomar e revisar
 
 - **Pausar:** impede a continuação da fila. Um clique em envio que já ocorreu pode concluir; nesse caso, o contato fica para revisão.
@@ -48,6 +54,10 @@ Uma busca vazia, um convite para usar o WhatsApp ou um erro de conexão não sã
 ## Como o envio é confirmado
 
 A extensão pesquisa o telefone em Nova conversa, abre o resultado e preenche o editor dentro da página já carregada. Antes de clicar no botão de envio, confere o número do cabeçalho ou dos dados do contato e o texto no editor. Depois, aguarda uma nova mensagem de saída com a confirmação visual do WhatsApp (um ou dois tiques). Isso confirma envio pelo WhatsApp, **não leitura ou entrega ao destinatário**. Mensagens que continuam com o relógio não são marcadas como enviadas.
+
+O preenchimento contempla o editor atual de texto rico, usando seu evento de colagem e, se necessário, a inserção de texto pelo navegador. Não há leitura ou alteração da área de transferência do computador. A ativação do botão segue uma sequência de ponteiro e um único clique; não há envio por Enter nem repetição automática de cliques incertos. A identificação do campo e dos dados do contato contempla estruturas sem as antigas marcações internas do WhatsApp.
+
+O painel informa a etapa atual: localizar o campo, conferir o contato, preencher o texto, acionar Enviar e aguardar confirmação. Se o editor não aceitar o texto, o erro deixa claro que o campo não foi preenchido e mantém o contato pendente. O CSV inclui nome reconhecido, última etapa, código e detalhe do erro para ajudar a investigar incompatibilidades.
 
 Mudanças de presença, como “online”, “digitando” ou “visto por último”, não são usadas como identidade da conversa. Mensagens antigas com texto igual não confirmam um novo envio: a extensão considera o identificador da nova mensagem, quando disponível. A confirmação do progresso pode ser repetida sem repetir o envio. O agendamento usa alarmes do Chrome e um despertador na página, com verificação periódica de recuperação. Ambos respeitam o horário mínimo configurado; computador suspenso, navegador fechado ou limitação do Chrome podem atrasar o avanço.
 
@@ -77,3 +87,5 @@ Os testes unitários cobrem importação, rodízio, intervalo após confirmaçã
 Antes de usar uma lista real, teste com números próprios autorizados: importar dois formatos do mesmo número, enviar uma lista curta com as três variantes, conferir os horários, pausar durante a espera e atualizar a aba. Teste também um número inválido e uma desconexão. Esta implementação não foi validada em uma sessão real do WhatsApp neste ambiente.
 
 Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.com/docs/extensions/reference/api/alarms), [ciclo de vida da extensão](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle), [troca de mensagens da extensão](https://developer.chrome.com/docs/extensions/develop/concepts/messaging) e [confirmações do WhatsApp](https://faq.whatsapp.com/665923838265756/).
+
+Também foram consultadas as especificações de [eventos de entrada](https://www.w3.org/TR/input-events-2/) e a documentação de [scripts de conteúdo do Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) para a interação com o editor.

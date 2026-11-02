@@ -23,5 +23,8 @@ Cobertura principal:
 - Uma resposta perdida de confirmação não duplica a mensagem ou o avanço.
 - A suspensão do processo da extensão preserva o agendamento.
 - Um teste separado mede o acionamento real após 120 segundos, sem relógio simulado.
+- Editor controlado que rejeita o método antigo de inserção, campo sem `footer`, painel de dados sem identificadores antigos e botão dependente de eventos de ponteiro.
+- Mensagens com `(nome)` para contatos diferentes, inclusive nome ausente, acentos, emoji e caracteres como `$&`.
+- Falha explícita de editor vazio, sem confirmação falsa de envio, e autorização do texto personalizado no processo da extensão.
 
 Limite de validação: DOM, APIs do Chrome e destinatários são simulados. Esta suíte não comprova compatibilidade de todas as versões do WhatsApp Web. A aceitação em uma sessão real deve conferir três números próprios/autorizados, tempos entre envios, um número não cadastrado e uma desconexão.

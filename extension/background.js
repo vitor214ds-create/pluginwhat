@@ -1,8 +1,9 @@
 import { STATE_KEY, createCampaign, pauseCampaign, resumeCampaign, resolveContact,
-  completeContact, skipUnregisteredContact } from './core.js';
+  completeContact, skipUnregisteredContact, personalizeMessage, MAX_TEXT_LENGTH } from './core.js';
 
 const ALARM = 'pluginwhat-next';
 const WATCHDOG = 'pluginwhat-watchdog';
+const STAGES = { editor: 'Localizando o campo de mensagem', verifying: 'Conferindo o número e o nome do contato', filling: 'Preenchendo a mensagem', ready: 'Mensagem preenchida; preparando envio', clicking: 'Acionando o botão Enviar', confirming: 'Aguardando a confirmação do WhatsApp' };
 let serial = Promise.resolve();
 // Every mutation and alarm is serialized. No long-running timers live in the worker.
 export function exclusive(operation) {
@@ -68,6 +69,13 @@ async function dispatch() {
 export async function handle(request, sender) {
   if (!request || typeof request.type !== 'string') throw new Error('Comando inválido.');
   const state = await getState();
+  if (request.type === 'STAGE') {
+    if (!STAGES[request.stage] || !state?.job) return {};
+    requireJob(state, sender, request, state.job.phase);
+    state.job.stage = request.stage; state.queue[state.cursor].lastStage = request.stage;
+    state.notice = `${STAGES[request.stage]} · contato ${state.cursor + 1} de ${state.queue.length}.`;
+    await save(state); return {};
+  }
   if (request.type === 'TICK') {
     if (sender.tab?.id !== state?.tabId || sender.frameId !== 0 || !isWhatsApp(sender.url)) return {};
     return { dispatch: true };
@@ -81,6 +89,10 @@ export async function handle(request, sender) {
   }
   if (request.type === 'PREPARED') {
     requireJob(state, sender, request, 'preparing');
+    const contactName = String(request.contactName || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 160);
+    const message = personalizeMessage(state.job.message, contactName);
+    if (!message || message.length > MAX_TEXT_LENGTH || (request.message != null && request.message !== message)) throw new Error('O texto personalizado não corresponde à mensagem configurada. Nenhum envio foi autorizado.');
+    state.job.message = message; state.queue[state.cursor].contactName = contactName;
     state.job.phase = 'sending'; state.job.deadline = Date.now() + 90000;
     state.lastAttemptAt = Date.now(); state.notice = `Enviando ao contato ${state.cursor + 1}.`;
     await save(state); return { approved: true };
@@ -92,8 +104,11 @@ export async function handle(request, sender) {
     state.lastResult = { jobId: request.jobId, documentId: sender.documentId };
     const detail = String(request.error || 'Não foi possível confirmar o envio.').slice(0, 400);
     if (!request.success) state.queue[state.cursor].detail = detail;
+    if (!request.success) state.queue[state.cursor].errorCode = String(request.errorCode || 'UNKNOWN').slice(0, 80);
     if (request.success && !request.preparing && request.evidence?.confirmed === true) {
       state.queue[state.cursor].messageId = String(request.evidence.messageId || '').slice(0, 200);
+      state.queue[state.cursor].errorCode = '';
+      state.queue[state.cursor].detail = 'Envio confirmado pelo WhatsApp.';
       await save(completeContact(state));
     } else if (request.preparing && request.errorCode === 'UNREGISTERED' && request.unregisteredConfirmed === true) {
       await save(skipUnregisteredContact(state, detail));
