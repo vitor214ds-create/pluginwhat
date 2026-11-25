@@ -6,7 +6,7 @@ root = Path(__file__).resolve().parent.parent
 extension = root / "extension"
 output = root / "dist" / "pluginwhat-extension.zip"
 output.parent.mkdir(exist_ok=True)
-files = ["manifest.json", "background.js", "core.js", "content.js", "content-main.js",
+files = ["manifest.json", "background.js", "site-bridge.js", "core.js", "content.js", "content-main.js",
          "whatsapp.js", "panel.html", "panel.css", "panel.js", "README.md"]
 with ZipFile(output, "w", ZIP_DEFLATED) as archive:
     for name in files:

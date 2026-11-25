@@ -59,7 +59,15 @@ export function validateConfig(config) {
   if (!Number.isFinite(intervalSeconds) || intervalSeconds < MIN_INTERVAL || intervalSeconds > MAX_INTERVAL) {
     throw new Error('O intervalo deve ficar entre 30 segundos e 24 horas.');
   }
-  return { contacts, messages: config.messages.map(m => m.trim()), intervalSeconds };
+  let contactMessages;
+  if (config.contactMessages != null) {
+    if (!Array.isArray(config.contactMessages) || config.contactMessages.length !== contacts.length ||
+        config.contactMessages.some(m => typeof m !== 'string' || !m.trim() || m.length > MAX_TEXT_LENGTH)) {
+      throw new Error('As mensagens personalizadas precisam corresponder a todos os contatos.');
+    }
+    contactMessages = config.contactMessages.map(m => m.trim());
+  }
+  return { contacts, messages: config.messages.map(m => m.trim()), intervalSeconds, contactMessages };
 }
 
 export function createCampaign(config, tabId, now = Date.now()) {
@@ -67,7 +75,7 @@ export function createCampaign(config, tabId, now = Date.now()) {
   return {
     id: crypto.randomUUID(), status: 'running', tabId,
     messages: clean.messages, intervalMs: clean.intervalSeconds * 1000,
-    queue: clean.contacts.map((phone, index) => ({ phone, template: index % 3, status: 'pending' })),
+    queue: clean.contacts.map((phone, index) => ({ phone, template: index % 3, status: 'pending', ...(clean.contactMessages ? { message: clean.contactMessages[index] } : {}) })),
     cursor: 0, job: null, nextAt: now, updatedAt: now, notice: 'Preparando o primeiro contato.'
   };
 }

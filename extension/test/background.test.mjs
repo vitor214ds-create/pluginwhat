@@ -11,10 +11,10 @@ const storage = object => ({
   async remove(keys) { for (const key of keys) delete object[key]; }
 });
 globalThis.chrome = {
-  runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, onMessage: event('message'), onStartup: event('startup') },
+  runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, getManifest: () => ({version:'1.3.0'}), onMessageExternal: event('external'), onMessage: event('message'), onStartup: event('startup') },
   storage: { local: storage(local), session: storage(session) },
   alarms: { async get(name) { return alarms.get(name); }, async clear(name) { alarms.delete(name); }, async create(name, options) { alarms.set(name, options); }, onAlarm: event('alarm') },
-  tabs: { async get(id) { if (!Number.isInteger(id)) throw new Error('closed'); return { id, url: 'https://web.whatsapp.com/' }; },
+  tabs: { async query() { return [{id:7,active:true,url:'https://web.whatsapp.com/'}]; }, async get(id) { if (!Number.isInteger(id)) throw new Error('closed'); return { id, url: 'https://web.whatsapp.com/' }; },
     async update() { throw new Error('Unexpected tab navigation'); },
     async sendMessage(id, request, options) {
       if (request.type === 'RUN_JOB') { runs.push({ id, ...request, options }); return { accepted: true }; }
@@ -23,7 +23,7 @@ globalThis.chrome = {
     onRemoved: event('removed'), onUpdated: event('updated'), async create() {}, async reload() { throw new Error('Unexpected page reload'); } },
   action: { onClicked: event('clicked') }
 };
-const { handle, exclusive } = await import('../background.js');
+const { handle, handleExternal, exclusive } = await import('../background.js');
 await exclusive(async () => {});
 const panel = { id: 'test', url: 'chrome-extension://test/panel.html', tab: { id: 7 }, frameId: 1 };
 const content = { id: 'test', url: 'https://web.whatsapp.com/', tab: { id: 7 }, frameId: 0, documentId: 'doc-A' };
@@ -136,4 +136,62 @@ test('reviewing an interrupted send from another WhatsApp tab rebinds the resume
   const replacementPanel = { ...panel, tab: { id: 8 } };
   await call('RESOLVE', { resolution: 'retry' }, replacementPanel);
   assert.equal(state().tabId, 8); assert.equal(state().status, 'running'); assert.equal(state().cursor, 0);
+});
+
+const externalSender = { url: 'https://site-scout-ai-90.lovable.app/search', origin: 'https://site-scout-ai-90.lovable.app', frameId: 0 };
+const clientId = '11111111-1111-4111-a111-111111111111';
+const siteCall = (type, extra = {}, sender = externalSender) => exclusive(() => handleExternal({ protocol: 'sitehunter-pluginwhat-v1', clientId, type, ...extra }, sender));
+function siteCampaign() {
+  return { requestId: crypto.randomUUID(), messages: ['Olá (empresa): (previa)', 'Bom dia (empresa)', 'Visite (previa)'], intervalSeconds: 120,
+    recipients: config.contacts.map((phone,index) => ({ phone, name:'Empresa '+index, city:'Vitória', placeId:'place-'+index,
+      previewUrl:'https://site-scout-ai-90.lovable.app/p/'+String(index+1).repeat(64), expiresAt:new Date(Date.now()+86400000).toISOString() })) };
+}
+test('site starts an idempotent campaign with each recipients own preview and dispatches without navigation', async () => {
+  delete local[STATE_KEY]; runs.length=0;
+  const campaign=siteCampaign(); const start=await siteCall('START_CAMPAIGN',{campaign});
+  assert.equal(start.dispatch,true); assert.equal(start.state.queue.length,2);
+  const duplicate=await siteCall('START_CAMPAIGN',{campaign});
+  assert.equal(duplicate.state.id,start.state.id); assert.equal(duplicate.dispatch,undefined);
+  events.alarm({name:'pluginwhat-next'});await flush();
+  const ready=await call('CONTENT_READY',{jobId:runs[0].jobId},content);
+  assert.ok(ready.job.message.includes(campaign.recipients[0].previewUrl));
+  assert.ok(!ready.job.message.includes(campaign.recipients[1].previewUrl));
+  await call('PREPARED',{jobId:ready.job.id,message:ready.job.message},content);
+  const before=Date.now(); await call('RESULT',{jobId:ready.job.id,success:true,evidence:{confirmed:true}},content);
+  assert.ok(state().nextAt>=before+120000);
+  local[STATE_KEY].nextAt=0;
+  events.alarm({name:'pluginwhat-next'});await flush();
+  const second=await call('CONTENT_READY',{jobId:runs[1].jobId},content);
+  assert.ok(second.job.message.startsWith('Bom dia Empresa 1'));
+  assert.ok(second.job.message.endsWith(campaign.recipients[1].previewUrl));
+  assert.ok(!second.job.message.includes(campaign.recipients[0].previewUrl));
+});
+test('untrusted origins cannot start or inspect; other local clients cannot see or control this queue', async () => {
+  const current=state();
+  await assert.rejects(siteCall('GET_STATUS',{}, {...externalSender,url:'https://attacker.test/search',origin:'https://attacker.test'}),/Origem/);
+  const other=await exclusive(()=>handleExternal({protocol:'sitehunter-pluginwhat-v1',clientId:crypto.randomUUID(),type:'GET_STATUS'},externalSender));
+  assert.equal(other.state,null); assert.equal(other.busy,true);
+  await assert.rejects(exclusive(()=>handleExternal({protocol:'sitehunter-pluginwhat-v1',clientId:crypto.randomUUID(),type:'STOP_CAMPAIGN',campaignId:current.id},externalSender)),/pertence/);
+  assert.equal(state().status,'running');
+});
+test('site pause and resume preserve the remaining interval and expired previews keep the recipient pending', async () => {
+  delete local[STATE_KEY];runs.length=0;
+  const campaign=siteCampaign();await siteCall('START_CAMPAIGN',{campaign});
+  local[STATE_KEY].nextAt=Date.now()+120000;local[STATE_KEY].notBefore=local[STATE_KEY].nextAt;
+  const due=state().nextAt;
+  await siteCall('PAUSE_CAMPAIGN',{campaignId:state().id});
+  await siteCall('RESUME_CAMPAIGN',{campaignId:state().id});
+  assert.ok(state().nextAt>=due);
+  local[STATE_KEY].queue[0].expiresAt='2000-01-01';local[STATE_KEY].nextAt=0;
+  events.alarm({name:'pluginwhat-next'});await flush();
+  assert.equal(runs.length,0);assert.equal(state().status,'paused');assert.equal(state().cursor,0);assert.equal(state().queue[0].status,'pending');
+});
+
+test('an old request cannot create a duplicate after another campaign has replaced the current state', async () => {
+  delete local[STATE_KEY]; const first=siteCampaign();await siteCall('START_CAMPAIGN',{campaign:first});
+  await siteCall('STOP_CAMPAIGN',{campaignId:state().id});
+  const second=siteCampaign();await siteCall('START_CAMPAIGN',{campaign:second});
+  await siteCall('STOP_CAMPAIGN',{campaignId:state().id});const retained=state().id;
+  const replay=await siteCall('START_CAMPAIGN',{campaign:first});
+  assert.equal(replay.alreadyStarted,true);assert.equal(replay.state,null);assert.equal(state().id,retained);assert.equal(state().status,'stopped');
 });

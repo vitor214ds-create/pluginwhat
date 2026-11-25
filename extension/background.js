@@ -1,5 +1,6 @@
 import { STATE_KEY, createCampaign, pauseCampaign, resumeCampaign, resolveContact,
   completeContact, skipUnregisteredContact, personalizeMessage, MAX_TEXT_LENGTH } from './core.js';
+import { requireSiteSender, decodeSiteCampaign, siteStatus } from './site-bridge.js';
 
 const ALARM = 'pluginwhat-next';
 const WATCHDOG = 'pluginwhat-watchdog';
@@ -12,9 +13,9 @@ export function exclusive(operation) {
   return result;
 }
 async function getState() { return (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || null; }
-async function save(state) {
+async function save(state, extra = {}) {
   state.updatedAt = Date.now();
-  await chrome.storage.local.set({ [STATE_KEY]: state });
+  await chrome.storage.local.set({ ...extra, [STATE_KEY]: state });
   await arm(state);
   return state;
 }
@@ -56,7 +57,8 @@ async function dispatch() {
   try {
     const tab = await chrome.tabs.get(state.tabId);
     if (!isWhatsApp(tab.url)) throw new Error('Reabra o WhatsApp Web para retomar.');
-    state.job = { id: crypto.randomUUID(), phone: row.phone, message: state.messages[row.template],
+    if (row.expiresAt && Date.parse(row.expiresAt) <= Date.now() + 300000) throw new Error('A prévia deste contato expirou ou está perto de expirar. Encerre e prepare novos links para os contatos pendentes.');
+    state.job = { id: crypto.randomUUID(), phone: row.phone, message: row.message ?? state.messages[row.template],
       phase: 'opening', deadline: Date.now() + 120000 };
     row.attempts = (row.attempts || 0) + 1;
     state.notice = `Abrindo contato ${state.cursor + 1} de ${state.queue.length}.`;
@@ -169,6 +171,82 @@ export async function handle(request, sender) {
   } else throw new Error('Comando desconhecido.');
   return { state: await getState() };
 }
+
+
+// The site's origin is checked by Chrome and again here. No generic panel commands are exposed.
+export async function handleExternal(request, sender) {
+  const origin = requireSiteSender(sender);
+  if (request?.protocol !== 'sitehunter-pluginwhat-v1') throw new Error('Protocolo incompatível.');
+  const state = await getState();
+  const clientId = request.clientId;
+  if (typeof clientId !== 'string' || !/^[a-f0-9-]{36}$/i.test(clientId)) throw new Error('Identificação local inválida.');
+  const own = state?.source?.origin === origin && state.source.clientId === clientId;
+  const findTab = async () => {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    const ready = [];
+    for (const tab of tabs) {
+      try { if ((await chrome.tabs.sendMessage(tab.id, { type: 'PING' }, { frameId: 0 }))?.ready) ready.push(tab); } catch {}
+    }
+    return ready.find(t => t.id === state?.tabId) || ready.find(t => t.active) || ready[0];
+  };
+  if (request.type === 'PING') return { version: chrome.runtime.getManifest().version, protocol: 1, whatsappReady: !!(await findTab()) };
+  if (request.type === 'OPEN_WHATSAPP') {
+    const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
+    if (tabs.length) await chrome.tabs.update(tabs[0].id, { active: true });
+    else await chrome.tabs.create({ url: 'https://web.whatsapp.com/' });
+    return {};
+  }
+  if (request.type === 'GET_STATUS') return { state: own ? siteStatus(state) : null, busy: !own && !!state && ['running', 'paused'].includes(state.status) };
+  if (request.type === 'START_CAMPAIGN') {
+    const requestId = request.campaign?.requestId;
+    if (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/i.test(requestId)) throw new Error('Identificador de campanha inválido.');
+    const receiptKey = `${origin}|${clientId}|${requestId}`;
+    const receipts = (await chrome.storage.local.get('pluginwhatSiteRequests')).pluginwhatSiteRequests || {};
+    if (Object.hasOwn(receipts, receiptKey)) return { state: own && state.id === receipts[receiptKey] ? siteStatus(state) : null, alreadyStarted: true };
+    const decoded = decodeSiteCampaign(request.campaign, origin);
+    // Replaying a request after a lost response never creates another sequence, even after completion.
+    if (own && state.source.requestId === decoded.requestId) return { state: siteStatus(state) };
+    if (state && ['running', 'paused'].includes(state.status)) throw new Error('Encerre a sequência atual antes de iniciar outra.');
+    const tab = await findTab();
+    if (!tab) throw new Error('Abra o WhatsApp Web, entre na conta e atualize a aba após instalar o plugin.');
+    const created = createCampaign(decoded.config, tab.id);
+    created.source = { origin, clientId, requestId: decoded.requestId };
+    created.queue.forEach((row, index) => Object.assign(row, decoded.recipients[index]));
+    await save(created, { pluginwhatSiteRequests: { ...receipts, [receiptKey]: created.id } });
+    return { state: siteStatus(created), dispatch: true };
+  }
+  if (!own || request.campaignId !== state.id) throw new Error('Esta sequência não pertence a esta conexão do site.');
+  if (request.type === 'PAUSE_CAMPAIGN') {
+    if (state.status === 'running') await save(pauseCampaign(state, 'Pausado pelo SiteHunter.'));
+  } else if (request.type === 'STOP_CAMPAIGN') {
+    if (['running', 'paused'].includes(state.status)) {
+      pauseCampaign(state, 'Sequência encerrada pelo SiteHunter.'); state.status = 'stopped'; await save(state);
+    }
+  } else if (request.type === 'RESUME_CAMPAIGN') {
+    const tab = await findTab();
+    if (!tab) throw new Error('Conecte o WhatsApp antes de retomar.');
+    resumeCampaign(state); state.tabId = tab.id; await save(state);
+    return { state: siteStatus(state), dispatch: true };
+  } else if (request.type === 'RESOLVE_CONTACT') {
+    if (!['sent', 'retry'].includes(request.resolution) || state.status !== 'paused') throw new Error('Revisão inválida.');
+    if (request.resolution === 'sent' && state.queue[state.cursor]?.status !== 'uncertain') throw new Error('Revise somente o envio incerto.');
+    const tab = await findTab();
+    if (!tab) throw new Error('Conecte o WhatsApp antes de revisar.');
+    state.tabId = tab.id;
+    resolveContact(state, request.resolution);
+    if (state.status === 'paused') resumeCampaign(state);
+    await save(state);
+    return { state: siteStatus(state), dispatch: state.status === 'running' };
+  } else throw new Error('Comando de integração desconhecido.');
+  return { state: siteStatus(await getState()) };
+}
+chrome.runtime.onMessageExternal?.addListener((request, sender, reply) => {
+  exclusive(() => handleExternal(request, sender)).then(result => {
+    reply({ ok: true, ...result });
+    if (result.dispatch) void exclusive(dispatch);
+  }).catch(error => reply({ ok: false, error: error.message }));
+  return true;
+});
 
 chrome.runtime.onMessage.addListener((request, sender, reply) => {
   exclusive(() => handle(request, sender)).then(result => {
