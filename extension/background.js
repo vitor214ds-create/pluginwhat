@@ -148,6 +148,12 @@ export async function handle(request, sender) {
     if (request.resolution === 'sent' && state?.queue[state.cursor]?.status !== 'uncertain') {
       throw new Error('A confirmação manual é apenas para envios incertos.');
     }
+    if (state?.status !== 'paused') throw new Error('Não há uma sequência pausada para revisar.');
+    const tab = await chrome.tabs.get(sender.tab?.id);
+    if (!isWhatsApp(tab.url)) throw new Error('Abra o painel no WhatsApp Web para revisar o envio.');
+    const ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }, { frameId: 0 });
+    if (!ping?.ready) throw new Error('Aguarde o WhatsApp carregar antes de continuar.');
+    state.tabId = tab.id;
     await save(resolveContact(state, request.resolution));
     if (state.status === 'paused') { resumeCampaign(state); await save(state); }
     return { state, dispatch: state.status === 'running' };

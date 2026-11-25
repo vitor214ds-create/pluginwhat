@@ -144,7 +144,7 @@ $('clear').addEventListener('click', async () => {
 });
 $('export').addEventListener('click', () => {
   if (!state) return;
-  const cell = value => { let text = String(value || ''); if (/^[=+\-@]/.test(text)) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; };
+  const cell = value => { let text = String(value || ''); if (/^[\s\uFEFF]*[=+\-@]/.test(text)) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; };
   const lines = ['numero,mensagem,status,concluido_em,nome,etapa,codigo,detalhe'];
   state.queue.forEach(row => lines.push([row.phone, row.template + 1, row.status, row.finishedAt ? new Date(row.finishedAt).toISOString() : '', row.contactName, row.lastStage, row.errorCode, row.detail].map(cell).join(',')));
   const url = URL.createObjectURL(new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));

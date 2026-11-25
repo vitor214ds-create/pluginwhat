@@ -7,6 +7,7 @@ npm --prefix qa ci
 node --test extension/test/*.test.mjs qa/*.test.mjs
 node qa/realtime-scheduler.mjs
 node scripts/check-extension.mjs
+node qa/native-browser.mjs
 ```
 
 Use Node.js 22 ou superior. O teste de tempo real demora dois minutos. Os demais usam um relógio controlado para percorrer campanhas completas com intervalos de 120 segundos.
@@ -28,3 +29,7 @@ Cobertura principal:
 - Falha explícita de editor vazio, sem confirmação falsa de envio, e autorização do texto personalizado no processo da extensão.
 
 Limite de validação: DOM, APIs do Chrome e destinatários são simulados. Esta suíte não comprova compatibilidade de todas as versões do WhatsApp Web. A aceitação em uma sessão real deve conferir três números próprios/autorizados, tempos entre envios, um número não cadastrado e uma desconexão.
+
+`native-browser.mjs` é uma verificação separada do adaptador em Chromium real, com página local de teste. Requer o navegador do Playwright ou `CHROMIUM_EXECUTABLE_PATH`. Não carrega uma conta real e não comprova a extensão completa instalada no Chrome. Veja o [relatório de auditoria](./AUDIT.md) para os resultados, defeitos reproduzidos e limites.
+
+Se o navegador do Playwright ainda não estiver instalado, execute `npx playwright install chromium` na pasta `qa` antes da verificação nativa.

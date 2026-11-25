@@ -110,7 +110,7 @@ function advanceContact(state, outcome, now) {
 export function resumeCampaign(state, now = Date.now()) {
   if (!state || state.status !== 'paused') throw new Error('Não há uma sequência pausada.');
   if (state.queue[state.cursor]?.status === 'uncertain') {
-    throw new Error('Confira o envio incerto e marque como enviado ou pule esse contato antes de retomar.');
+    throw new Error('Confira o envio incerto e informe se já foi enviado ou se deseja tentar novamente. O contato permanece na fila.');
   }
   state.status = 'running'; state.job = null;
   state.nextAt = Math.max(now, state.notBefore || 0, state.lastAttemptAt ? state.lastAttemptAt + state.intervalMs : now);

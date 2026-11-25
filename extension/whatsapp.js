@@ -5,21 +5,32 @@ export function normalizeText(text) { return String(text || '').replace(/\r\n/g,
 export function readText(node) {
   if (!node) return '';
   if (!node.querySelector?.('img[alt]') || !node.childNodes) return node.innerText ?? node.textContent ?? '';
+  const blocks = new Set(['DIV', 'P', 'LI']);
   const walk = child => {
     if (child.nodeType === 3) return child.textContent;
+    if (['SCRIPT', 'STYLE'].includes(child.nodeName) || child.hidden || child.style?.display === 'none') return '';
     if (child.nodeName === 'IMG') return child.getAttribute('alt') || '';
     if (child.nodeName === 'BR') return '\n';
-    const text = [...(child.childNodes || [])].map(walk).join('');
-    return ['DIV', 'P'].includes(child.nodeName) ? text + '\n' : text;
+    return children(child);
   };
-  return [...node.childNodes].map(walk).join('');
+  const children = parent => {
+    let text = '', previousBlock = false;
+    for (const child of parent.childNodes || []) {
+      const part = walk(child), block = blocks.has(child.nodeName);
+      if (!part) continue;
+      if ((block || previousBlock) && text && !text.endsWith('\n')) text += '\n';
+      text += part; previousBlock = block;
+    }
+    return text;
+  };
+  return children(node);
 }
 function failure(code, message, retryable = false) { return Object.assign(new Error(message), { code, retryable }); }
-export function isLoggedIn(doc = document) { return Boolean(doc.querySelector('#pane-side, [data-testid="chat-list"]')); }
+export function isLoggedIn(doc = document) { return visible(doc.querySelector('#pane-side, [data-testid="chat-list"]')); }
 export function composer(doc = document) {
   const original = doc.querySelector('#main footer [contenteditable="true"][role="textbox"]');
   if (visible(original)) return original;
-  const boxes = [...(doc.querySelectorAll?.('#main [contenteditable="true"]') || [])].filter(node => visible(node) && !node.closest('header, [role="dialog"]'));
+  const boxes = [...(doc.querySelectorAll?.('#main [contenteditable="true"], #main [contenteditable="plaintext-only"], #main [contenteditable=""]') || [])].filter(node => visible(node) && !node.closest('header, [role="dialog"]'));
   return boxes.find(node => node.matches('[data-lexical-editor="true"], [data-testid="conversation-compose-box-input"], [data-tab="10"]') || /digite uma mensagem|type a message|escreva uma mensagem/i.test(node.getAttribute('aria-label') || '')) ||
     (boxes.length === 1 ? boxes[0] : null);
 }
@@ -37,7 +48,27 @@ function titleOf(header) {
 }
 function sameConversation(snapshot, doc) {
   const main = doc.querySelector('#main'), header = main?.querySelector('header');
-  return visible(main) && visible(header) && titleOf(header) === snapshot.title;
+  const key = conversationKey(main);
+  return visible(main) && visible(header) && titleOf(header) === snapshot.title &&
+    comparableChatKeysMatch(snapshot.key, key) && !isGroup(main);
+}
+function comparableChatKeysMatch(before, after) {
+  if (!before || !after || before === after) return true;
+  const [oldId, oldDomain] = before.split('@'), [newId, newDomain] = after.split('@');
+  const phoneDomains = new Set(['c.us', 's.whatsapp.net']);
+  if (oldDomain === newDomain || (phoneDomains.has(oldDomain) && phoneDomains.has(newDomain))) return oldId === newId;
+  // Different namespaces are not proof of a different recipient without a supported mapping.
+  return true;
+}
+function conversationKey(main) {
+  const messages = main?.querySelectorAll?.('[data-id]') || [];
+  const keys = [...messages].filter(node => node.matches?.('.message-in, .message-out') || node.querySelector?.('.message-in, .message-out'))
+    .map(node => /^(?:true|false)_([^_]+)_/.exec(node.getAttribute('data-id') || '')?.[1]).filter(Boolean);
+  return keys.at(-1) || '';
+}
+function isGroup(main) {
+  return /@(?:g\.us|broadcast|newsletter)$/.test(conversationKey(main)) ||
+    visible(main?.querySelector?.('header [aria-label="Dados do grupo"], header [aria-label="Informações do grupo"], header [aria-label="Group info"], header [title="Dados do grupo"], header [title="Group info"]'));
 }
 function closeInfoButton(drawer) {
   return drawer.querySelector('button[aria-label="Fechar"], [role="button"][aria-label="Fechar"], button[aria-label="Close"], [role="button"][aria-label="Close"], button[aria-label="Voltar"], [role="button"][aria-label="Voltar"], button[aria-label="Back"]') ||
@@ -102,9 +133,13 @@ async function fillComposer(box, text, doc, cancelled) {
   const view = doc.defaultView;
   // Modern rich-text editors handle paste themselves. No system clipboard access is used.
   if (view?.DataTransfer && view?.ClipboardEvent && box.dispatchEvent) {
-    const data = new view.DataTransfer(); data.setData('text/plain', text);
-    box.dispatchEvent(new view.ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true, composed: true }));
-    await delay(250); checkCancelled(cancelled);
+    let dispatched = false;
+    try {
+      const data = new view.DataTransfer(); data.setData('text/plain', text);
+      box.dispatchEvent(new view.ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true, composed: true }));
+      dispatched = true;
+    } catch { /* A browser may expose these constructors while refusing synthetic paste. */ }
+    if (dispatched) { await delay(250); checkCancelled(cancelled); }
   }
   if (normalizeText(readText(box)) !== normalizeText(text)) {
     try { replaceEditable(box, text, doc); }
@@ -157,7 +192,8 @@ export async function openConversation(job, { doc = document, cancelled = () => 
     if (evidence) throw Object.assign(failure('UNREGISTERED', 'O WhatsApp confirmou que este número não está cadastrado.'), { evidence });
     if (!scope) return null;
     const rows = [...scope.querySelectorAll(CONTACT_ROWS)].filter(node =>
-      visible(node) && !node.closest('#main') && !/not on whatsapp|não está no whatsapp|convidar|invite/i.test(node.innerText));
+      visible(node) && !node.closest('#main') && !/^(convidar|invite)$/i.test(node.getAttribute?.('aria-label') || '') &&
+      !node.matches?.('[data-testid="invite-contact"]'));
     // Collapse nested wrappers of the same result before considering a single saved contact.
     const unique = rows.filter(node => !rows.some(other => other !== node && node.contains(other)));
     const exact = unique.filter(node => phoneIn(node.innerText, job.phone) ||
@@ -179,6 +215,8 @@ export async function openConversation(job, { doc = document, cancelled = () => 
 export function unregisteredEvidence(doc, job, scope) {
   const candidates = [scope, ...doc.querySelectorAll('[role="alert"], [role="dialog"]')].filter(Boolean);
   for (const node of candidates) {
+    // User-controlled names/about text in a real contact row are not a platform error.
+    if (node === scope && [...(scope.querySelectorAll?.(CONTACT_ROWS) || [])].some(visible)) continue;
     const text = normalizeText(readText(node));
     const explicit = /(?:not|isn['’]t)\s+(?:registered\s+)?on\s+whatsapp|não\s+(?:está|é)\s+(?:cadastrado\s+)?no\s+whatsapp|não\s+(?:usa|utiliza)\s+(?:o\s+)?whatsapp|não\s+tem\s+(?:uma\s+)?conta\s+no\s+whatsapp/i.test(text);
     const numbers = text.match(/\+?\d[\d ().-]{6,}\d/g) || [];
@@ -201,6 +239,7 @@ export async function prepare(job, { doc = document, cancelled = () => false, ti
   }, timeout, cancelled);
   const header = main.querySelector('header');
   if (!header) throw new Error('Cabeçalho da conversa não encontrado.');
+  if (isGroup(main)) throw failure('GROUP_NOT_ALLOWED', 'A conversa aberta é um grupo ou canal. A sequência só permite contatos individuais.');
   let contactName = usableName(titleOf(header));
   let verified = phoneIn(readText(header), job.phone);
   if (!verified) {
@@ -244,7 +283,7 @@ export async function prepare(job, { doc = document, cancelled = () => false, ti
     throw new Error('A mensagem ou o botão de envio mudou. Confira a conversa e retome.');
   }
   await onStage('ready');
-  return { main, header, title: titleOf(header), box, button, message, contactName };
+  return { main, header, title: titleOf(header), key: conversationKey(main), box, button, message, contactName };
 }
 
 function messageId(node) {

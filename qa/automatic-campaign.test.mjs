@@ -10,7 +10,7 @@ const key = 'pluginwhatCampaign';
 let generation = 0;
 
 async function harness(t, { invalid = [], empty = [], noAck = false, dropReply = false, contactNames = {}, templateMessages = messages,
-  modernEditor = false, semanticInfo = false, pointerRequired = false, editorUnavailable = false } = {}) {
+  modernEditor = false, semanticInfo = false, pointerRequired = false, editorUnavailable = false, contactDescriptions = {} } = {}) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000000 });
   const dom = new JSDOM('<!doctype html><button aria-label="Nova conversa">Nova conversa</button><div id="pane-side"></div><section id="main"></section>', { url: 'https://web.whatsapp.com/' });
   const doc = dom.window.document, sent = [], alarms = new Map(), events = {}, storageListeners = new Set(), local = {}, session = {};
@@ -73,6 +73,7 @@ async function harness(t, { invalid = [], empty = [], noAck = false, dropReply =
         if (invalid.includes(phone)) { grid.textContent = `O número +${phone} não está no WhatsApp.`; return; }
         if (empty.includes(phone)) { grid.textContent = 'Nenhum resultado encontrado. Verifique a conexão.'; return; }
         const row = create('div', { role: 'row' }, '+' + phone);
+        if (contactDescriptions[phone]) row.append('\n', create('span', {}, contactDescriptions[phone]));
         row.addEventListener('click', () => { drawer.remove(); chat(phone); }); grid.append(row);
       }, 300);
     });
@@ -187,7 +188,7 @@ test('an old matching message re-rendered under the same ID cannot confirm a new
   const replacement = button.cloneNode(true); button.replaceWith(replacement);
   replacement.addEventListener('click', () => {
     const rerendered = old.cloneNode(true); old.replaceWith(rerendered);
-    const pending = rerendered.cloneNode(true); pending.setAttribute('data-id', 'true_phone_NEW'); pending.querySelector('[data-icon]').setAttribute('data-icon', 'msg-time'); main.insertBefore(pending, main.querySelector('footer')); box.textContent = '';
+    const pending = rerendered.cloneNode(true); pending.setAttribute('data-id', `true_${phones[0]}@c.us_NEW`); pending.querySelector('[data-icon]').setAttribute('data-icon', 'msg-time'); main.insertBefore(pending, main.querySelector('footer')); box.textContent = '';
   });
   const operation = sendPrepared({ phone: phones[0], message: messages[0] }, snapshot, { doc: f.doc, timeout: 500 });
   const rejected = assert.rejects(operation, /verificar/); await f.advance(1000); await rejected;
@@ -206,4 +207,9 @@ test('an unavailable editor produces a precise filling error and never pretends 
   const f = await harness(t, { modernEditor: true, editorUnavailable: true }); await f.start(); await f.advance(20000);
   assert.equal(f.sent.length, 0); assert.equal(f.state().status, 'paused'); assert.equal(f.state().cursor, 0);
   assert.equal(f.state().queue[0].errorCode, 'EDITOR_INSERT_FAILED'); assert.equal(f.state().queue[0].lastStage, 'filling');
+});
+test('free-form profile text cannot exclude a valid contact from the automatic sequence', async t => {
+  const f = await harness(t, { contactDescriptions: { [phones[0]]: 'Este número não está no WhatsApp.' } });
+  await f.start();
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].phone, phones[0]); assert.equal(f.state().queue[0].status, 'sent');
 });

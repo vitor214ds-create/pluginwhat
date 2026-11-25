@@ -130,3 +130,10 @@ test('the authorized send uses the resolved name and rejects a message different
   await call('PREPARED', { jobId, contactName: 'Maria', message: 'Bom dia Maria, tudo bem?' }, content);
   assert.equal(state().job.message, 'Bom dia Maria, tudo bem?'); assert.equal(state().queue[0].contactName, 'Maria');
 });
+test('reviewing an interrupted send from another WhatsApp tab rebinds the resumed campaign to that tab', async () => {
+  await open(); const jobId = state().job.id; await call('PREPARED', { jobId }, content);
+  events.removed(7); await flush();
+  const replacementPanel = { ...panel, tab: { id: 8 } };
+  await call('RESOLVE', { resolution: 'retry' }, replacementPanel);
+  assert.equal(state().tabId, 8); assert.equal(state().status, 'running'); assert.equal(state().cursor, 0);
+});

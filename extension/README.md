@@ -63,6 +63,8 @@ Mudanças de presença, como “online”, “digitando” ou “visto por últi
 
 O adaptador está em `whatsapp.js`. Seus seletores dependem da interface do WhatsApp Web, que pode mudar sem aviso. Se a interface não for reconhecida, o comportamento é pausar. Cabeçalhos com número e a gaveta de dados do contato são suportados; a confirmação de contatos salvos pode exigir atualização dos seletores em versões diferentes do WhatsApp.
 
+A versão 1.2.1 inclui correções de leitura de mensagens com emoji e quebra de linha, proteção contra interpretar descrições de contatos como erro de cadastro, editores `plaintext-only`, grupos/canais reconhecíveis e retomada a partir de outra aba. A auditoria detalhada e seus limites estão em `qa/AUDIT.md` no repositório.
+
 ## Privacidade e uso
 
 Contatos, mensagens e progresso ficam em `chrome.storage.local`, no seu perfil do Chrome. Não há servidor, telemetria, leitura de cookies, acesso a credenciais, coleta de conversas nem código remoto. As mensagens são enviadas ao WhatsApp para o funcionamento solicitado. A extensão usa somente as permissões `storage`, `alarms` e acesso a `web.whatsapp.com`.

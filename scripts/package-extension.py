@@ -11,6 +11,7 @@ files = ["manifest.json", "background.js", "core.js", "content.js", "content-mai
 with ZipFile(output, "w", ZIP_DEFLATED) as archive:
     for name in files:
         archive.write(extension / name, "pluginwhat-extension/" + name)
+    archive.write(root / "qa" / "AUDIT.md", "pluginwhat-extension/AUDIT.md")
 with ZipFile(output) as archive:
     assert archive.testzip() is None
 print(output)

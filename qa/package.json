@@ -2,6 +2,11 @@
   "name": "pluginwhat-integration-tests",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test *.test.mjs" },
-  "devDependencies": { "jsdom": "20.0.3" }
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "20.0.3",
+    "playwright": "^1.62.1"
+  }
 }
