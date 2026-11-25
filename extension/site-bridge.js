@@ -1,11 +1,11 @@
 import { validateConfig, MAX_TEXT_LENGTH } from './core.js';
 
-const SITE = 'https://site-scout-ai-90.lovable.app';
+const SITES = new Set(['https://site-scout-ai-90.lovable.app', 'https://zsites.lovable.app']);
 export function requireSiteSender(sender) {
   let url;
   try { url = new URL(sender?.url); } catch { throw new Error('Origem não autorizada.'); }
   const local = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
-  if ((!local && url.origin !== SITE) || url.username || url.password ||
+  if ((!local && !SITES.has(url.origin)) || url.username || url.password ||
       (sender.origin && sender.origin !== url.origin) ||
       (sender.frameId != null && sender.frameId !== 0)) throw new Error('Origem não autorizada.');
   return url.origin;

@@ -93,9 +93,9 @@ Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.
 Também foram consultadas as especificações de [eventos de entrada](https://www.w3.org/TR/input-events-2/) e a documentação de [scripts de conteúdo do Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) para a interação com o editor.
 
 
-## Integração com SiteHunter — versão 1.3.0
+## Integração com SiteHunter — versão 1.3.1
 
-No site `https://site-scout-ai-90.lovable.app`, abra Busca e o painel **Automatizar WhatsApp**. Instale o pacote integrado baixado ali ou esta pasta da extensão. Copie o ID de `chrome://extensions` para o site e clique em Conectar plugin. Após instalar ou atualizar, atualize a aba do WhatsApp uma vez.
+No site `https://zsites.lovable.app` (ou no endereço anterior `https://site-scout-ai-90.lovable.app`), abra Busca e o painel **Automatizar WhatsApp**. Instale o pacote integrado baixado ali ou esta pasta da extensão. Copie o ID de `chrome://extensions` para o site e clique em Conectar plugin. Após instalar ou atualizar, atualize a aba do WhatsApp uma vez.
 
 Selecione a quantidade e as empresas da cidade pesquisada, escreva as três mensagens e configure minutos/segundos (mínimo 30 segundos). O botão **Gerar prévias e iniciar envios** prepara os links individuais e inicia a fila inteira. **Preparar e revisar prévias** permite conferir sem enviar. O navegador e o WhatsApp precisam continuar abertos/conectados.
 
@@ -107,6 +107,6 @@ Selecione a quantidade e as empresas da cidade pesquisada, escreva as três mens
 - A mesma solicitação de início é registrada no armazenamento local para impedir repetição após perda de resposta. Limpar os dados/desinstalar a extensão também remove essa proteção.
 - Links expirados pausam no contato atual. Revogar uma prévia no estúdio pode invalidar um link de uma fila já iniciada.
 
-O canal externo aceita somente o domínio publicado acima e localhost/127.0.0.1 para desenvolvimento. Não aceita outros projetos Lovable. Um domínio próprio exige atualizar a lista exata em `manifest.json` e `site-bridge.js`. Não são enviados tokens de autenticação do site à extensão.
+O canal externo aceita somente os dois domínios publicados acima e localhost/127.0.0.1 para desenvolvimento. Não aceita outros projetos Lovable. Um domínio próprio exige atualizar a lista exata em `manifest.json` e `site-bridge.js`. Não são enviados tokens de autenticação do site à extensão.
 
 O canal usa APIs oficiais de comunicação de extensões Chrome. A automação da interface do WhatsApp é uma integração independente, não oficial, sujeita a mudanças da interface e às regras do WhatsApp. Use contatos autorizados. Não há garantia de envio infalível ou de ausência de restrições na conta.

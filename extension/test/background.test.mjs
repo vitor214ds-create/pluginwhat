@@ -11,7 +11,7 @@ const storage = object => ({
   async remove(keys) { for (const key of keys) delete object[key]; }
 });
 globalThis.chrome = {
-  runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, getManifest: () => ({version:'1.3.0'}), onMessageExternal: event('external'), onMessage: event('message'), onStartup: event('startup') },
+  runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, getManifest: () => ({version:'1.3.1'}), onMessageExternal: event('external'), onMessage: event('message'), onStartup: event('startup') },
   storage: { local: storage(local), session: storage(session) },
   alarms: { async get(name) { return alarms.get(name); }, async clear(name) { alarms.delete(name); }, async create(name, options) { alarms.set(name, options); }, onAlarm: event('alarm') },
   tabs: { async query() { return [{id:7,active:true,url:'https://web.whatsapp.com/'}]; }, async get(id) { if (!Number.isInteger(id)) throw new Error('closed'); return { id, url: 'https://web.whatsapp.com/' }; },

@@ -8,6 +8,7 @@ const input = () => ({ requestId: crypto.randomUUID(), messages: ['Olá (empresa
 
 test('origin validation rejects lookalike domains, mismatched origins, subframes and extension callers', () => {
   assert.equal(requireSiteSender({url:origin+'/search',origin}),origin);
+  assert.equal(requireSiteSender({url:'https://zsites.lovable.app/search',origin:'https://zsites.lovable.app'}),'https://zsites.lovable.app');
   assert.equal(requireSiteSender({url:'http://localhost:5173/search'}),'http://localhost:5173');
   for(const sender of [{url:origin+'.evil.test/search'}, {url:origin+'/search',origin:'https://evil.test'}, {url:origin+'/search',frameId:1}, {url:'chrome-extension://fake/page'}, {url:'https://other.lovable.app/search'}]) assert.throws(()=>requireSiteSender(sender),/Origem/);
 });
