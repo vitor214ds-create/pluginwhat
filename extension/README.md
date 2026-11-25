@@ -93,7 +93,7 @@ Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.
 Também foram consultadas as especificações de [eventos de entrada](https://www.w3.org/TR/input-events-2/) e a documentação de [scripts de conteúdo do Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) para a interação com o editor.
 
 
-## Integração com SiteHunter — versão 1.4.0
+## Integração com SiteHunter — versão 1.4.1
 
 No site `https://zsites.lovable.app` (ou endereço anterior `https://site-scout-ai-90.lovable.app`), abra Busca e **Automatizar WhatsApp**. Atualize os arquivos na pasta já instalada e recarregue em `chrome://extensions` para conservar o ID. Atualize a aba do WhatsApp uma vez e conecte o plugin no site.
 
@@ -110,4 +110,4 @@ A integração envia **o arquivo HTML do botão Exportar site**, com as imagens 
 
 O canal externo permite apenas os dois domínios acima e localhost/127.0.0.1 para desenvolvimento. O site não fornece JWT/senha/chaves ao plugin. O documento não é executado pela extensão. A comunicação site-plugin usa APIs do Chrome; a automação do WhatsApp depende da interface externa e não é uma integração oficial da Meta. Use contatos autorizados.
 
-A versão 1.4.0 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.
+A versão 1.4.1 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.

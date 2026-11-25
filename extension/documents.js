@@ -8,6 +8,13 @@ export function documentDescriptor(value) {
       !/^[a-f0-9]{64}$/.test(value.sha256 || '')) throw new Error('Documento HTML inválido ou maior que 50 MB. Exporte novamente a prévia.');
   return { id: value.id, name: value.name, mime: value.mime, size: value.size, sha256: value.sha256 };
 }
+// Storage/IPC round trips may reorder properties. Identity depends on validated values.
+export function sameDocumentDescriptor(left, right) {
+  try {
+    const a = documentDescriptor(left), b = documentDescriptor(right);
+    return ['id', 'name', 'mime', 'size', 'sha256'].every(key => a[key] === b[key]);
+  } catch { return false; }
+}
 export function bytesToBase64(bytes) {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
@@ -65,7 +72,7 @@ export function createDocumentStore(factory = () => globalThis.indexedDB) {
       await removeKeys(expired.map(row => row.key));
       const current = rows.find(row => row.key === key && !expired.includes(row));
       if (current) {
-        if (JSON.stringify(current.descriptor) !== JSON.stringify(descriptor)) throw new Error('O documento mudou durante a transferência. Gere novamente.');
+        if (!sameDocumentDescriptor(current.descriptor, descriptor)) throw new Error('O documento mudou durante a transferência. Gere novamente.');
         return { ready: current.ready, nextIndex: current.nextIndex };
       }
       if (rows.filter(row => !expired.includes(row)).reduce((n, row) => n + row.descriptor.size, 0) + descriptor.size > MAX_STAGED_BYTES) throw new Error('Os documentos ultrapassam 256 MB no plugin. Encerre a sequência anterior ou reduza os arquivos/quantidade.');

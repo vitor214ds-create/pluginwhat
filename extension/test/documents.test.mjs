@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { IDBFactory } from '../../qa/node_modules/fake-indexeddb/build/esm/index.js';
-import { createDocumentStore, DOCUMENT_CHUNK_BYTES, bytesToBase64, sha256 } from '../documents.js';
+import { createDocumentStore, sameDocumentDescriptor, DOCUMENT_CHUNK_BYTES, bytesToBase64, sha256 } from '../documents.js';
 async function sample(length=100){const bytes=new Uint8Array(length).fill(65);return {bytes,document:{id:crypto.randomUUID(),name:'Empresa-previa.html',mime:'text/html',size:length,sha256:await sha256(bytes)}};}
 test('a chunked HTML survives worker recreation with exact bytes and is isolated by owner',async()=>{
  const factory=new IDBFactory(),store=createDocumentStore(()=>factory),{bytes,document}=await sample(DOCUMENT_CHUNK_BYTES+17),owner='site|owner';
@@ -26,4 +26,23 @@ test('storage reserves a bounded total and releases documents after completion',
  for(let i=0;i<5;i++){const document={id:crypto.randomUUID(),name:'file.html',mime:'text/html',size:50_000_000,sha256:'a'.repeat(64)};ids.push(document.id);await store.begin('owner',document);}
  await assert.rejects(store.begin('owner',{id:crypto.randomUUID(),name:'file.html',mime:'text/html',size:50_000_000,sha256:'a'.repeat(64)}),/256 MB/);
  await store.release('owner',ids);await store.begin('owner',{id:crypto.randomUUID(),name:'file.html',mime:'text/html',size:50_000_000,sha256:'a'.repeat(64)});
+});
+
+
+test('descriptor equality accepts all 120 property orders and rejects actual value/type changes',async()=>{
+ const {document}=await sample();
+ function permutations(values){return values.length?values.flatMap((key,i)=>permutations(values.filter((_,j)=>j!==i)).map(rest=>[key,...rest])):[[]];}
+ const orders=permutations(Object.keys(document));assert.equal(orders.length,120);
+ for(const order of orders)assert.equal(sameDocumentDescriptor(document,Object.fromEntries(order.map(key=>[key,document[key]]))),true);
+ for(const [key,value] of Object.entries({id:crypto.randomUUID(),name:'Outra.html',mime:'text/plain',size:document.size+1,sha256:'0'.repeat(64)}))assert.equal(sameDocumentDescriptor(document,{...document,[key]:value}),false,key);
+ assert.equal(sameDocumentDescriptor(document,{...document,size:String(document.size)}),false);
+ assert.equal(sameDocumentDescriptor(document,null),false);assert.equal(sameDocumentDescriptor({},{}),false);
+});
+test('an already staged descriptor can resume with reordered persisted properties',async()=>{
+ const factory=new IDBFactory(),store=createDocumentStore(()=>factory),{bytes,document}=await sample();
+ await store.begin('owner',document);await store.append('owner',document.id,0,bytesToBase64(bytes));await store.finish('owner',document.id);
+ const db=await new Promise((resolve,reject)=>{const r=factory.open('pluginwhat-documents',1);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+ await new Promise((resolve,reject)=>{const tx=db.transaction('documents','readwrite'),table=tx.objectStore('documents'),r=table.get(store.key('owner',document.id));r.onsuccess=()=>table.put({...r.result,descriptor:Object.fromEntries(Object.entries(r.result.descriptor).reverse())});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
+ const resumed=await store.begin('owner',document);assert.equal(resumed.ready,true);assert.equal(resumed.nextIndex,1);
+ assert.equal(await store.chunk('owner',document.id,0),bytesToBase64(bytes));
 });

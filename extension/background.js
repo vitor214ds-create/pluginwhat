@@ -1,7 +1,7 @@
 import { STATE_KEY, createCampaign, pauseCampaign, resumeCampaign, resolveContact,
   completeContact, skipUnregisteredContact, personalizeMessage, MAX_TEXT_LENGTH } from './core.js';
 import { requireSiteSender, decodeSiteCampaign, siteStatus } from './site-bridge.js';
-import { createDocumentStore } from './documents.js';
+import { createDocumentStore, sameDocumentDescriptor } from './documents.js';
 const documentStore = createDocumentStore();
 const documentOwner = source => `${source.origin}|${source.clientId}`;
 
@@ -66,7 +66,7 @@ async function dispatch() {
     if (state.source && !row.attachment) throw new Error('Esta sequência antiga usa links. Encerre-a e prepare novamente para enviar documentos.');
     if (row.attachment) {
       const savedDocument = await documentStore.descriptor(documentOwner(state.source), row.attachment.id);
-      if (JSON.stringify(savedDocument) !== JSON.stringify(row.attachment)) throw new Error('O documento salvo não corresponde ao contato. Prepare novamente.');
+      if (!sameDocumentDescriptor(savedDocument, row.attachment)) throw new Error('O documento salvo não corresponde ao contato. Prepare novamente.');
     }
     state.job = { id: crypto.randomUUID(), phone: row.phone, message: row.message ?? state.messages[row.template],
       phase: 'opening', deadline: Date.now() + 120000, ...(row.attachment ? { attachment: row.attachment } : {}) };
@@ -233,7 +233,7 @@ export async function handleExternal(request, sender) {
     if (state && ['running', 'paused'].includes(state.status)) throw new Error('Encerre a sequência atual antes de iniciar outra.');
     for (const row of decoded.recipients) {
       const stored = await documentStore.descriptor(`${origin}|${clientId}`, row.attachment.id);
-      if (JSON.stringify(stored) !== JSON.stringify(row.attachment)) throw new Error('Transfira o documento correto de cada empresa antes de iniciar.');
+      if (!sameDocumentDescriptor(stored, row.attachment)) throw new Error('Transfira o documento correto de cada empresa antes de iniciar.');
     }
     const tab = await findTab();
     if (!tab) throw new Error('Abra o WhatsApp Web, entre na conta e atualize a aba após instalar o plugin.');

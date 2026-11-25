@@ -9,13 +9,20 @@ import { STATE_KEY } from '../core.js';
 const events = {};
 function event(name) { return { addListener(fn) { events[name] = fn; } }; }
 const local = {}, session = {}, alarms = new Map(), runs = [];
+let reorderStorageKeys = false;
+function sortedJson(value) {
+  if (Array.isArray(value)) return value.map(sortedJson);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortedJson(value[key])]));
+  return value;
+}
+const storageCopy = value => reorderStorageKeys ? sortedJson(structuredClone(value)) : structuredClone(value);
 const storage = object => ({
-  async get(key) { return structuredClone({ [key]: object[key] }); },
-  async set(value) { Object.assign(object, structuredClone(value)); },
+  async get(key) { return storageCopy({ [key]: object[key] }); },
+  async set(value) { Object.assign(object, storageCopy(value)); },
   async remove(keys) { for (const key of keys) delete object[key]; }
 });
 globalThis.chrome = {
-  runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, getManifest: () => ({version:'1.4.0'}), onMessageExternal: event('external'), onMessage: event('message'), onStartup: event('startup') },
+  runtime: { id: 'test', getURL: path => `chrome-extension://test/${path}`, getManifest: () => ({version:'1.4.1'}), onMessageExternal: event('external'), onMessage: event('message'), onStartup: event('startup') },
   storage: { local: storage(local), session: storage(session) },
   alarms: { async get(name) { return alarms.get(name); }, async clear(name) { alarms.delete(name); }, async create(name, options) { alarms.set(name, options); }, onAlarm: event('alarm') },
   tabs: { async query() { return [{id:7,active:true,url:'https://web.whatsapp.com/'}]; }, async get(id) { if (!Number.isInteger(id)) throw new Error('closed'); return { id, url: 'https://web.whatsapp.com/' }; },
@@ -217,4 +224,44 @@ test('document jobs expose only their bound chunks and cannot authorize or confi
  await call('PREPARED',{jobId,message:ready.job.message,attachmentHash:ready.job.attachment.sha256,fileName:ready.job.attachment.name},content);
  await call('RESULT',{jobId,success:true,evidence:{confirmed:true}},content);
  assert.equal(state().cursor,0);assert.equal(state().status,'paused');assert.equal(state().queue[0].status,'uncertain');
+});
+
+
+test('regression: reordered JSON keys must not reject an intact document before first dispatch',async()=>{
+ delete local[STATE_KEY];runs.length=0;
+ try {
+  reorderStorageKeys=true;
+  const campaign=await siteCampaign();await siteCall('START_CAMPAIGN',{campaign});
+  events.alarm({name:'pluginwhat-next'});await flush();
+  assert.equal(state().status,'running',state().notice);
+  assert.equal(runs.length,1);assert.equal(state().cursor,0);assert.equal(state().queue[0].status,'pending');
+  const ready=await call('CONTENT_READY',{jobId:runs[0].jobId},content);
+  assert.equal(ready.job.attachment.sha256,campaign.recipients[0].document.sha256);
+ }finally{reorderStorageKeys=false;}
+});
+test('regression: an existing paused 1.4.0 queue resumes without replacing documents or skipping its first contact',async()=>{
+ delete local[STATE_KEY];runs.length=0;
+ try {
+  const campaign=await siteCampaign();await siteCall('START_CAMPAIGN',{campaign});
+  const originalId=state().id,attachment=state().queue[0].attachment;
+  local[STATE_KEY].queue[0].attachment=Object.fromEntries(Object.entries(attachment).reverse());
+  local[STATE_KEY].status='paused';local[STATE_KEY].job=null;local[STATE_KEY].nextAt=null;
+  local[STATE_KEY].notice='O documento salvo não corresponde ao contato. Prepare novamente.';
+  reorderStorageKeys=true;
+  await call('RESUME');local[STATE_KEY].nextAt=0;
+  events.alarm({name:'pluginwhat-next'});await flush();
+  assert.equal(state().status,'running',state().notice);assert.equal(state().id,originalId);
+  assert.equal(state().cursor,0);assert.equal(state().queue[0].status,'pending');assert.equal(runs.length,1);
+  assert.deepEqual(state().queue[0].attachment,attachment);
+ }finally{reorderStorageKeys=false;}
+});
+test('regression: real document ID, filename, MIME, size or checksum changes still block dispatch',async()=>{
+ const mutations={id:crypto.randomUUID(),name:'Outra-empresa-previa.html',mime:'text/plain',size:1,sha256:'0'.repeat(64)};
+ for(const [key,value] of Object.entries(mutations)) {
+  delete local[STATE_KEY];runs.length=0;
+  const campaign=await siteCampaign();await siteCall('START_CAMPAIGN',{campaign});
+  local[STATE_KEY].queue[0].attachment[key]=value;
+  events.alarm({name:'pluginwhat-next'});await flush();
+  assert.equal(state().status,'paused',key);assert.equal(state().cursor,0,key);assert.equal(runs.length,0,key);assert.equal(state().queue[0].status,'pending',key);
+ }
 });
