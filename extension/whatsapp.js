@@ -141,18 +141,18 @@ async function fillComposer(box, text, doc, cancelled) {
     } catch { /* A browser may expose these constructors while refusing synthetic paste. */ }
     if (dispatched) { await delay(250); checkCancelled(cancelled); }
   }
-  if (normalizeText(readText(box)) !== normalizeText(text)) {
+  if (normalizeText(editableText(box)) !== normalizeText(text)) {
     try { replaceEditable(box, text, doc); }
     catch (error) { if (!view?.InputEvent) throw failure('EDITOR_INSERT_FAILED', 'O contato abriu, mas o editor não aceitou o texto da mensagem.', true); }
     if (view?.InputEvent && box.dispatchEvent) {
       box.dispatchEvent(new view.InputEvent('input', { inputType: 'insertText', data: text, bubbles: true, composed: true }));
     }
   }
-  if (normalizeText(readText(box)) !== normalizeText(text) && view?.InputEvent && box.dispatchEvent) {
+  if (normalizeText(editableText(box)) !== normalizeText(text) && view?.InputEvent && box.dispatchEvent) {
     box.dispatchEvent(new view.InputEvent('beforeinput', { inputType: 'insertReplacementText', data: text, bubbles: true, cancelable: true, composed: true }));
     await delay(250); checkCancelled(cancelled);
   }
-  if (normalizeText(readText(box)) !== normalizeText(text)) throw failure('EDITOR_INSERT_FAILED', 'O contato abriu, mas o campo de mensagem continuou vazio ou não aceitou o texto. Nenhum envio foi realizado.', true);
+  if (normalizeText(editableText(box)) !== normalizeText(text)) throw failure('EDITOR_INSERT_FAILED', 'O contato abriu, mas o campo de mensagem continuou vazio ou não aceitou o texto. Nenhum envio foi realizado.', true);
 }
 function newChatButton(doc) {
   const button = doc.querySelector('[aria-label="Nova conversa"], [title="Nova conversa"], [aria-label="New chat"], [title="New chat"]');
@@ -229,7 +229,7 @@ export function unregisteredEvidence(doc, job, scope) {
   return null;
 }
 
-export async function prepare(job, { doc = document, cancelled = () => false, timeout = 60000, fillMessage = false, onStage = async () => {} } = {}) {
+export async function prepare(job, { doc = document, cancelled = () => false, timeout = 60000, fillMessage = false, attachmentFile = null, onStage = async () => {} } = {}) {
   await onStage('verifying');
   const main = await until(() => {
     const root = doc.querySelector('#main');
@@ -264,6 +264,10 @@ export async function prepare(job, { doc = document, cancelled = () => false, ti
   checkCancelled(cancelled);
   const message = personalizeMessage(job.message, contactName);
   if (!message || message.length > MAX_TEXT_LENGTH) throw failure('PERSONALIZED_MESSAGE_INVALID', 'A mensagem personalizada ficou vazia ou ultrapassou 3.000 caracteres. Ajuste o texto antes de continuar.');
+  if (job.attachment) {
+    if (!attachmentFile) throw failure('DOCUMENT_MISSING', 'O documento desta empresa não está disponível. Nenhum envio foi realizado.');
+    return prepareDocument(job, { main, header, title: titleOf(header), key: conversationKey(main), message, contactName }, attachmentFile, { doc, cancelled, timeout, onStage });
+  }
   if (fillMessage) {
     await onStage('filling'); checkCancelled(cancelled);
     const box = composer(doc);
@@ -294,6 +298,7 @@ function messageMatches(node, text) {
   return [...node.querySelectorAll('[data-testid="msg-text"], .selectable-text')].some(part => normalizeText(readText(part)) === normalizeText(text));
 }
 export async function sendPrepared(job, snapshot, { doc = document, cancelled = () => false, timeout = 60000, onClick = () => {}, onStage = async () => {} } = {}) {
+  if (job.attachment) return sendDocumentPrepared(job, snapshot, { doc, cancelled, timeout, onClick, onStage });
   await onStage('clicking');
   checkCancelled(cancelled);
   const main = doc.querySelector('#main'), box = composer(doc), button = sendButton(doc);
@@ -332,4 +337,112 @@ export async function sendPrepared(job, snapshot, { doc = document, cancelled = 
     return false;
   }, timeout, cancelled);
   return acknowledgement;
+}
+
+
+function editableText(node) { return node?.matches?.('input, textarea') ? node.value : readText(node); }
+function documentInput(doc) {
+  const candidates = [...doc.querySelectorAll('input[type="file"]')].filter(input => {
+    const accept = (input.getAttribute('accept') || '').toLowerCase().split(',').map(s => s.trim());
+    return !input.disabled && (accept.every(s => !s) || accept.includes('*') || accept.includes('*/*') || accept.includes('.html') || accept.includes('text/html'));
+  });
+  return candidates.find(input => input.closest('[data-testid="attach-document"], [aria-label="Documento"], [aria-label="Document"]')) || (candidates.length === 1 ? candidates[0] : null);
+}
+function scopedSend(scope) {
+  const icons = [...scope.querySelectorAll('[data-icon="send"], [data-icon="wds-ic-send-filled"]')];
+  return icons.map(icon => icon.closest('button, [role="button"]')).find(visible) || [...scope.querySelectorAll('button, [role="button"]')].find(button => visible(button) && /^(enviar|send|enviar mensagem|send message)$/i.test(button.getAttribute('aria-label') || ''));
+}
+function captionBox(scope) {
+  return [...scope.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"], textarea, input[type="text"]')].filter(visible).find(node => /legenda|caption|mensagem|message/i.test(node.getAttribute('aria-label') || node.getAttribute('placeholder') || '') || node.matches('[data-lexical-editor], [role="textbox"], textarea'));
+}
+function containsFileName(scope, name) {
+  return [...scope.querySelectorAll('[title], [data-testid="document-title"], span, div')].some(node => (scope.closest('.message-out, .message-in') || !node.closest('.message-out, .message-in')) && (node.getAttribute('title') === name || normalizeText(readText(node)) === name));
+}
+function attachmentPreview(doc, name) {
+  const selectors = '[data-testid="media-editor"], [data-testid="document-preview"], [data-testid="media-preview"], [role="dialog"], [data-animate-modal-popup]';
+  for (const scope of doc.querySelectorAll(selectors)) {
+    if (visible(scope) && !scope.closest('.message-out, .message-in') && containsFileName(scope, name) && scopedSend(scope) && captionBox(scope)) return scope;
+  }
+  // Some versions omit the modal test ID. Use the smallest bounded ancestor of its exact file name.
+  for (const node of doc.querySelectorAll('[title], span')) {
+    if (!visible(node) || node.closest('.message-out, .message-in') || !(node.getAttribute('title') === name || normalizeText(readText(node)) === name)) continue;
+    for (let scope = node.parentElement, depth = 0; scope && depth < 6; scope = scope.parentElement, depth++) {
+      if (scope.id === 'main' || scope.querySelector('#pane-side, #main > header') || scope === doc.body) break;
+      if (scopedSend(scope) && captionBox(scope)) return scope;
+    }
+  }
+  return null;
+}
+async function prepareDocument(job, identity, file, { doc, cancelled, timeout, onStage }) {
+  checkCancelled(cancelled);
+  if (file.name !== job.attachment.name || file.size !== job.attachment.size || file.type !== 'text/html') throw failure('DOCUMENT_MISMATCH', 'O arquivo não corresponde à prévia desta empresa.');
+  if (normalizeText(readText(composer(doc)))) throw failure('EXISTING_DRAFT', 'Esta conversa já tem um rascunho. Confira antes de anexar o documento.');
+  if ([...doc.querySelectorAll('[data-testid="media-editor"], [data-testid="document-preview"], [data-testid="media-preview"]')].some(visible)) throw failure('EXISTING_ATTACHMENT', 'Já existe um anexo aberto. Confira a conversa antes de retomar.');
+  await onStage('attaching');
+  let input = documentInput(doc);
+  if (!input) {
+    const main = doc.querySelector('#main');
+    const trigger = main.querySelector('footer [aria-label="Anexar"], footer [aria-label="Attach"], footer [title="Anexar"], footer [title="Attach"]') || main.querySelector('footer [data-icon="plus"], footer [data-icon="clip"], footer [data-icon="attach-menu-plus"]')?.closest('button, [role="button"]');
+    if (!visible(trigger)) throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'O botão de anexar documento não foi localizado. Nenhuma mensagem foi enviada.');
+    trigger.click();
+    try { input = await until(() => documentInput(doc), Math.min(timeout, 8000), cancelled); }
+    catch (error) { if (error.code === 'CANCELLED') throw error; throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'O campo de anexar documento não ficou disponível nesta versão do WhatsApp. Nenhum envio foi realizado.'); }
+  }
+  if (!sameConversation(identity, doc)) throw failure('RECIPIENT_MISMATCH', 'A conversa mudou antes de anexar o arquivo.');
+  const view = doc.defaultView;
+  if (!view?.DataTransfer) throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'Este navegador não disponibilizou a seleção de documentos.');
+  const transfer = new view.DataTransfer(); transfer.items.add(file);
+  input.files = transfer.files;
+  if (input.files.length !== 1 || input.files[0].name !== file.name || input.files[0].size !== file.size) throw failure('DOCUMENT_MISMATCH', 'O navegador não selecionou o documento correto.');
+  input.dispatchEvent(new view.Event('change', { bubbles: true }));
+  let preview;
+  try { preview = await until(() => attachmentPreview(doc, file.name), Math.min(timeout, 20000), cancelled); }
+  catch (error) { if (error.code === 'CANCELLED') throw error; throw failure('DOCUMENT_PREVIEW_UNAVAILABLE', 'O WhatsApp não preparou o documento com legenda. Confira o formato e a conversa. Nenhum envio foi realizado.'); }
+  if (!sameConversation(identity, doc)) throw failure('RECIPIENT_MISMATCH', 'A conversa mudou durante a preparação do documento.');
+  const box = captionBox(preview);
+  const existing = normalizeText(editableText(box));
+  if (existing && existing !== normalizeText(identity.message)) throw failure('EXISTING_DRAFT', 'O anexo já tem uma legenda diferente. Confira antes de continuar.');
+  await onStage('filling');
+  if (existing !== normalizeText(identity.message)) await fillComposer(box, identity.message, doc, cancelled);
+  const button = await until(() => {
+    const send = scopedSend(preview);
+    return visible(send) && !send.disabled && send.getAttribute('aria-disabled') !== 'true' && send;
+  }, Math.min(timeout, 15000), cancelled);
+  if (normalizeText(editableText(box)) !== normalizeText(identity.message) || !containsFileName(preview, file.name)) throw failure('DOCUMENT_MISMATCH', 'O documento ou sua legenda mudou antes do envio.');
+  await onStage('ready');
+  return { ...identity, kind: 'document', preview, box, button, input, file, attachmentHash: job.attachment.sha256 };
+}
+async function sendDocumentPrepared(job, snapshot, { doc, cancelled, timeout, onClick, onStage }) {
+  await onStage('clicking'); checkCancelled(cancelled);
+  const { preview, box, button } = snapshot;
+  if (snapshot.kind !== 'document' || snapshot.attachmentHash !== job.attachment.sha256 || !sameConversation(snapshot, doc) ||
+      !visible(preview) || attachmentPreview(doc, job.attachment.name) !== preview || scopedSend(preview) !== button ||
+      !visible(box) || !visible(button) || button.disabled || button.getAttribute('aria-disabled') === 'true' ||
+      normalizeText(editableText(box)) !== normalizeText(job.message) || !containsFileName(preview, job.attachment.name)) throw failure('DOCUMENT_BEFORE_CLICK_CHANGED', 'A conversa, o documento ou a legenda mudou antes do envio. Nenhum clique foi realizado.');
+  const before = outgoing(doc.querySelector('#main')), beforeIds = new Set(before.map(messageId).filter(Boolean));
+  onClick();
+  const view = doc.defaultView;
+  if (view?.MouseEvent && button.dispatchEvent) {
+    if (view.PointerEvent) button.dispatchEvent(new view.PointerEvent('pointerdown', { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 }));
+    button.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    if (view.PointerEvent) button.dispatchEvent(new view.PointerEvent('pointerup', { bubbles: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0 }));
+    button.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true, button: 0 }));
+  }
+  button.click();
+  await onStage('confirming');
+  let evidence;
+  await until(() => {
+    if (!sameConversation(snapshot, doc)) throw failure('CONVERSATION_CHANGED', 'A conversa mudou após o clique do documento. Confira o envio.');
+    const fresh = outgoing(doc.querySelector('#main')).filter(node => {
+      const id = messageId(node);
+      return (id ? !beforeIds.has(id) : !before.includes(node)) && containsFileName(node, job.attachment.name) && messageMatches(node, job.message);
+    }).at(-1);
+    const ack = fresh?.querySelector('[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-dblcheck-ack"], [data-testid="msg-check"], [data-testid="msg-dblcheck"]');
+    if (ack && !visible(preview)) {
+      evidence = { confirmed: true, messageId: messageId(fresh), fileName: job.attachment.name, attachmentHash: job.attachment.sha256 };
+      return true;
+    }
+    return false;
+  }, timeout, cancelled);
+  return evidence;
 }

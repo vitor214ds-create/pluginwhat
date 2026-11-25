@@ -1,10 +1,13 @@
 import { STATE_KEY, createCampaign, pauseCampaign, resumeCampaign, resolveContact,
   completeContact, skipUnregisteredContact, personalizeMessage, MAX_TEXT_LENGTH } from './core.js';
 import { requireSiteSender, decodeSiteCampaign, siteStatus } from './site-bridge.js';
+import { createDocumentStore } from './documents.js';
+const documentStore = createDocumentStore();
+const documentOwner = source => `${source.origin}|${source.clientId}`;
 
 const ALARM = 'pluginwhat-next';
 const WATCHDOG = 'pluginwhat-watchdog';
-const STAGES = { editor: 'Localizando o campo de mensagem', verifying: 'Conferindo o número e o nome do contato', filling: 'Preenchendo a mensagem', ready: 'Mensagem preenchida; preparando envio', clicking: 'Acionando o botão Enviar', confirming: 'Aguardando a confirmação do WhatsApp' };
+const STAGES = { attaching: 'Anexando o documento HTML da empresa', editor: 'Localizando o campo de mensagem', verifying: 'Conferindo o número e o nome do contato', filling: 'Preenchendo a mensagem', ready: 'Mensagem preenchida; preparando envio', clicking: 'Acionando o botão Enviar', confirming: 'Aguardando a confirmação do WhatsApp' };
 let serial = Promise.resolve();
 // Every mutation and alarm is serialized. No long-running timers live in the worker.
 export function exclusive(operation) {
@@ -17,6 +20,9 @@ async function save(state, extra = {}) {
   state.updatedAt = Date.now();
   await chrome.storage.local.set({ ...extra, [STATE_KEY]: state });
   await arm(state);
+  if (state.source && ['completed', 'stopped'].includes(state.status)) {
+    try { await documentStore.release(documentOwner(state.source), state.queue.flatMap(row => row.attachment ? [row.attachment.id] : [])); } catch { /* A cleanup failure must not undo a confirmed send. */ }
+  }
   return state;
 }
 async function arm(state) {
@@ -57,9 +63,13 @@ async function dispatch() {
   try {
     const tab = await chrome.tabs.get(state.tabId);
     if (!isWhatsApp(tab.url)) throw new Error('Reabra o WhatsApp Web para retomar.');
-    if (row.expiresAt && Date.parse(row.expiresAt) <= Date.now() + 300000) throw new Error('A prévia deste contato expirou ou está perto de expirar. Encerre e prepare novos links para os contatos pendentes.');
+    if (state.source && !row.attachment) throw new Error('Esta sequência antiga usa links. Encerre-a e prepare novamente para enviar documentos.');
+    if (row.attachment) {
+      const savedDocument = await documentStore.descriptor(documentOwner(state.source), row.attachment.id);
+      if (JSON.stringify(savedDocument) !== JSON.stringify(row.attachment)) throw new Error('O documento salvo não corresponde ao contato. Prepare novamente.');
+    }
     state.job = { id: crypto.randomUUID(), phone: row.phone, message: row.message ?? state.messages[row.template],
-      phase: 'opening', deadline: Date.now() + 120000 };
+      phase: 'opening', deadline: Date.now() + 120000, ...(row.attachment ? { attachment: row.attachment } : {}) };
     row.attempts = (row.attempts || 0) + 1;
     state.notice = `Abrindo contato ${state.cursor + 1} de ${state.queue.length}.`;
     await save(state);
@@ -89,11 +99,17 @@ export async function handle(request, sender) {
     state.job.phase = 'preparing'; state.job.documentId = sender.documentId;
     await save(state); return { job: state.job };
   }
+  if (request.type === 'GET_DOCUMENT_CHUNK') {
+    requireJob(state, sender, request, 'preparing');
+    if (!state.job.attachment || !state.source) throw new Error('Este envio não possui documento.');
+    return { base64: await documentStore.chunk(documentOwner(state.source), state.job.attachment.id, request.index) };
+  }
   if (request.type === 'PREPARED') {
     requireJob(state, sender, request, 'preparing');
     const contactName = String(request.contactName || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 160);
     const message = personalizeMessage(state.job.message, contactName);
     if (!message || message.length > MAX_TEXT_LENGTH || (request.message != null && request.message !== message)) throw new Error('O texto personalizado não corresponde à mensagem configurada. Nenhum envio foi autorizado.');
+    if (state.job.attachment && (request.attachmentHash !== state.job.attachment.sha256 || request.fileName !== state.job.attachment.name)) throw new Error('O documento preparado não corresponde ao arquivo desta empresa. Nenhum envio foi autorizado.');
     state.job.message = message; state.queue[state.cursor].contactName = contactName;
     state.job.phase = 'sending'; state.job.deadline = Date.now() + 90000;
     state.lastAttemptAt = Date.now(); state.notice = `Enviando ao contato ${state.cursor + 1}.`;
@@ -107,10 +123,11 @@ export async function handle(request, sender) {
     const detail = String(request.error || 'Não foi possível confirmar o envio.').slice(0, 400);
     if (!request.success) state.queue[state.cursor].detail = detail;
     if (!request.success) state.queue[state.cursor].errorCode = String(request.errorCode || 'UNKNOWN').slice(0, 80);
-    if (request.success && !request.preparing && request.evidence?.confirmed === true) {
+    if (request.success && !request.preparing && request.evidence?.confirmed === true &&
+        (!state.job.attachment || (request.evidence.attachmentHash === state.job.attachment.sha256 && request.evidence.fileName === state.job.attachment.name))) {
       state.queue[state.cursor].messageId = String(request.evidence.messageId || '').slice(0, 200);
       state.queue[state.cursor].errorCode = '';
-      state.queue[state.cursor].detail = 'Envio confirmado pelo WhatsApp.';
+      state.queue[state.cursor].detail = state.job.attachment ? 'Documento e legenda confirmados pelo WhatsApp.' : 'Envio confirmado pelo WhatsApp.';
       await save(completeContact(state));
     } else if (request.preparing && request.errorCode === 'UNREGISTERED' && request.unregisteredConfirmed === true) {
       await save(skipUnregisteredContact(state, detail));
@@ -166,6 +183,7 @@ export async function handle(request, sender) {
     }
   } else if (request.type === 'CLEAR') {
     if (state?.status === 'running') throw new Error('Pause ou encerre antes de apagar.');
+    if (state?.source) await documentStore.release(documentOwner(state.source), state.queue.flatMap(row => row.attachment ? [row.attachment.id] : []));
     await chrome.storage.local.remove([STATE_KEY, 'pluginwhatDraft']);
     await chrome.alarms.clear(ALARM); await chrome.alarms.clear(WATCHDOG); return { state: null };
   } else throw new Error('Comando desconhecido.');
@@ -176,7 +194,7 @@ export async function handle(request, sender) {
 // The site's origin is checked by Chrome and again here. No generic panel commands are exposed.
 export async function handleExternal(request, sender) {
   const origin = requireSiteSender(sender);
-  if (request?.protocol !== 'sitehunter-pluginwhat-v1') throw new Error('Protocolo incompatível.');
+  if (request?.protocol !== 'sitehunter-pluginwhat-v2') throw new Error('Protocolo incompatível.');
   const state = await getState();
   const clientId = request.clientId;
   if (typeof clientId !== 'string' || !/^[a-f0-9-]{36}$/i.test(clientId)) throw new Error('Identificação local inválida.');
@@ -189,7 +207,7 @@ export async function handleExternal(request, sender) {
     }
     return ready.find(t => t.id === state?.tabId) || ready.find(t => t.active) || ready[0];
   };
-  if (request.type === 'PING') return { version: chrome.runtime.getManifest().version, protocol: 1, whatsappReady: !!(await findTab()) };
+  if (request.type === 'PING') return { version: chrome.runtime.getManifest().version, protocol: 2, whatsappReady: !!(await findTab()) };
   if (request.type === 'OPEN_WHATSAPP') {
     const tabs = await chrome.tabs.query({ url: 'https://web.whatsapp.com/*' });
     if (tabs.length) await chrome.tabs.update(tabs[0].id, { active: true });
@@ -197,6 +215,12 @@ export async function handleExternal(request, sender) {
     return {};
   }
   if (request.type === 'GET_STATUS') return { state: own ? siteStatus(state) : null, busy: !own && !!state && ['running', 'paused'].includes(state.status) };
+  if (request.type === 'DOCUMENT_BEGIN') {
+    const protectedKeys = state?.source && ['running', 'paused'].includes(state.status) ? state.queue.flatMap(row => row.attachment ? [documentStore.key(documentOwner(state.source), row.attachment.id)] : []) : [];
+    return await documentStore.begin(`${origin}|${clientId}`, request.document, protectedKeys);
+  }
+  if (request.type === 'DOCUMENT_CHUNK') return await documentStore.append(`${origin}|${clientId}`, request.documentId, request.index, request.base64);
+  if (request.type === 'DOCUMENT_FINISH') return { document: await documentStore.finish(`${origin}|${clientId}`, request.documentId) };
   if (request.type === 'START_CAMPAIGN') {
     const requestId = request.campaign?.requestId;
     if (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/i.test(requestId)) throw new Error('Identificador de campanha inválido.');
@@ -207,6 +231,10 @@ export async function handleExternal(request, sender) {
     // Replaying a request after a lost response never creates another sequence, even after completion.
     if (own && state.source.requestId === decoded.requestId) return { state: siteStatus(state) };
     if (state && ['running', 'paused'].includes(state.status)) throw new Error('Encerre a sequência atual antes de iniciar outra.');
+    for (const row of decoded.recipients) {
+      const stored = await documentStore.descriptor(`${origin}|${clientId}`, row.attachment.id);
+      if (JSON.stringify(stored) !== JSON.stringify(row.attachment)) throw new Error('Transfira o documento correto de cada empresa antes de iniciar.');
+    }
     const tab = await findTab();
     if (!tab) throw new Error('Abra o WhatsApp Web, entre na conta e atualize a aba após instalar o plugin.');
     const created = createCampaign(decoded.config, tab.id);

@@ -93,20 +93,21 @@ Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.
 Também foram consultadas as especificações de [eventos de entrada](https://www.w3.org/TR/input-events-2/) e a documentação de [scripts de conteúdo do Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) para a interação com o editor.
 
 
-## Integração com SiteHunter — versão 1.3.1
+## Integração com SiteHunter — versão 1.4.0
 
-No site `https://zsites.lovable.app` (ou no endereço anterior `https://site-scout-ai-90.lovable.app`), abra Busca e o painel **Automatizar WhatsApp**. Instale o pacote integrado baixado ali ou esta pasta da extensão. Copie o ID de `chrome://extensions` para o site e clique em Conectar plugin. Após instalar ou atualizar, atualize a aba do WhatsApp uma vez.
+No site `https://zsites.lovable.app` (ou endereço anterior `https://site-scout-ai-90.lovable.app`), abra Busca e **Automatizar WhatsApp**. Atualize os arquivos na pasta já instalada e recarregue em `chrome://extensions` para conservar o ID. Atualize a aba do WhatsApp uma vez e conecte o plugin no site.
 
-Selecione a quantidade e as empresas da cidade pesquisada, escreva as três mensagens e configure minutos/segundos (mínimo 30 segundos). O botão **Gerar prévias e iniciar envios** prepara os links individuais e inicia a fila inteira. **Preparar e revisar prévias** permite conferir sem enviar. O navegador e o WhatsApp precisam continuar abertos/conectados.
+A integração envia **o arquivo HTML do botão Exportar site**, com as imagens e o vídeo disponíveis. Cada empresa recebe seu documento individual; a mensagem da variante 1/2/3 acompanha o anexo como legenda. O destinatário deve baixar e abrir o HTML no navegador.
 
-- `(empresa)`, `(cidade)` e `(previa)` vêm da empresa selecionada; `(nome)` usa o nome disponível no WhatsApp.
-- Cada contato recebe seu próprio link; ele é acrescentado mesmo sem `(previa)` no texto.
-- Empresas com site informado, fechadas ou sem telefone válido são excluídas da seleção. Telefones repetidos aparecem uma vez. Não se comprova ausência de site apenas pela ausência do campo no Google.
-- Com a opção de IA desmarcada, o site usa a prévia salva ou cria seu modelo padrão. A IA opcional pode consumir créditos. Não se geram imagens/vídeos pagos automaticamente.
-- A sequência usa os mesmos alarmes, confirmação e intervalos da lista TXT. Pausar, retomar, encerrar e revisar envio incerto estão disponíveis no site e no painel do WhatsApp.
-- A mesma solicitação de início é registrada no armazenamento local para impedir repetição após perda de resposta. Limpar os dados/desinstalar a extensão também remove essa proteção.
-- Links expirados pausam no contato atual. Revogar uma prévia no estúdio pode invalidar um link de uma fila já iniciada.
+- **Preparar e revisar prévias** permite baixar e conferir o arquivo antes de enviar.
+- **Gerar prévias e iniciar envios** prepara os documentos, transfere os arquivos ao plugin e inicia a fila inteira. Falha de preparação/transferência impede início parcial.
+- `(empresa)`, `(cidade)` e `(nome)` continuam disponíveis. O marcador legado `(previa)` e os URLs antigos de compartilhamento do SiteHunter são removidos da legenda. Nenhum link de prévia é acrescentado automaticamente.
+- Seleção por cidade, quantidade, três mensagens alternadas, intervalo configurável, pausa/retomada, TXT e operação sem recarregar o WhatsApp permanecem disponíveis.
+- Arquivos são transferidos em partes de 256 KiB e conferidos por SHA-256 antes de iniciar e antes de anexar. Os bytes ficam no IndexedDB da extensão; o estado JSON contém só metadados. Limites: 50 MB por HTML e 256 MB de documentos armazenados/preparados no plugin.
+- Só há confirmação quando aparece uma nova mensagem de saída com nome do documento, legenda e tique. Um texto sem o documento não confirma o contato. Falha ambígua depois do clique pausa para revisão e não repete automaticamente.
+- Arquivos são removidos do plugin ao concluir, encerrar ou apagar a sequência. Transferências abandonadas e não usadas pela fila podem ser limpas após 24 horas. Se o navegador remover arquivos por falta de espaço, o envio pausa.
+- Sequências antigas com links não são convertidas em silêncio: encerre e prepare novamente os contatos pendentes para usar documentos.
 
-O canal externo aceita somente os dois domínios publicados acima e localhost/127.0.0.1 para desenvolvimento. Não aceita outros projetos Lovable. Um domínio próprio exige atualizar a lista exata em `manifest.json` e `site-bridge.js`. Não são enviados tokens de autenticação do site à extensão.
+O canal externo permite apenas os dois domínios acima e localhost/127.0.0.1 para desenvolvimento. O site não fornece JWT/senha/chaves ao plugin. O documento não é executado pela extensão. A comunicação site-plugin usa APIs do Chrome; a automação do WhatsApp depende da interface externa e não é uma integração oficial da Meta. Use contatos autorizados.
 
-O canal usa APIs oficiais de comunicação de extensões Chrome. A automação da interface do WhatsApp é uma integração independente, não oficial, sujeita a mudanças da interface e às regras do WhatsApp. Use contatos autorizados. Não há garantia de envio infalível ou de ausência de restrições na conta.
+A versão 1.4.0 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.

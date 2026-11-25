@@ -1,4 +1,5 @@
 import { isLoggedIn, openConversation, prepare, sendPrepared } from './whatsapp.js';
+import { DOCUMENT_CHUNK_BYTES, base64ToBytes, sha256 } from './documents.js';
 
 export async function start() {
   if (window.__pluginwhatLoaded) return;
@@ -106,10 +107,11 @@ export function createJobRunner({ host, doc = document, api = chrome,
         if (!job || !ready.ok || cancelled) return;
         const options = { doc, cancelled: () => cancelled, onClick: () => { clicked = true; },
           onStage: async stage => { try { await api.runtime.sendMessage({ type: 'STAGE', jobId: job.id, stage }); } catch { /* Progress must not interrupt a send. */ } } };
+        const attachmentFile = job.attachment ? await readJobDocument(job, api, doc, () => cancelled) : null;
         await actions.openConversation(job, options);
-        const snapshot = await actions.prepare(job, { ...options, fillMessage: true });
+        const snapshot = await actions.prepare(job, { ...options, fillMessage: true, attachmentFile });
         const resolvedJob = { ...job, message: snapshot.message ?? job.message };
-        const approved = await api.runtime.sendMessage({ type: 'PREPARED', jobId: job.id, message: resolvedJob.message, contactName: snapshot.contactName || '' });
+        const approved = await api.runtime.sendMessage({ type: 'PREPARED', jobId: job.id, message: resolvedJob.message, contactName: snapshot.contactName || '', attachmentHash: snapshot.attachmentHash, fileName: snapshot.file?.name });
         if (approved.ok && approved.approved) preparing = false;
         if (!approved.ok || !approved.approved || cancelled) throw new Error(approved.error || 'Envio cancelado antes do clique.');
         const evidence = await actions.sendPrepared(resolvedJob, snapshot, options);
@@ -134,4 +136,19 @@ export function createJobRunner({ host, doc = document, api = chrome,
       }
     }
   };
+}
+
+
+export async function readJobDocument(job, api, doc, cancelled = () => false) {
+  const info = job.attachment, bytes = new Uint8Array(info.size);
+  for (let index = 0; index < Math.ceil(info.size / DOCUMENT_CHUNK_BYTES); index++) {
+    if (cancelled()) throw new Error('Preparação do documento cancelada.');
+    const response = await api.runtime.sendMessage({ type: 'GET_DOCUMENT_CHUNK', jobId: job.id, index });
+    if (!response?.ok) throw new Error(response?.error || 'O documento não foi recebido do plugin.');
+    const chunk = base64ToBytes(response.base64);
+    if (chunk.length !== Math.min(DOCUMENT_CHUNK_BYTES, info.size - index * DOCUMENT_CHUNK_BYTES)) throw new Error('O documento recebido está incompleto.');
+    bytes.set(chunk, index * DOCUMENT_CHUNK_BYTES);
+  }
+  if (await sha256(bytes) !== info.sha256) throw new Error('O documento recebido não corresponde ao arquivo exportado. Nenhum envio foi realizado.');
+  return new doc.defaultView.File([bytes], info.name, { type: info.mime });
 }
