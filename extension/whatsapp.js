@@ -78,7 +78,7 @@ function infoDrawer(doc) {
   const known = doc.querySelector('[data-testid="drawer-right"], [data-testid="contact-info-drawer"], [role="dialog"][aria-label="Contact info"], [role="region"][aria-label="Dados do contato"]');
   if (visible(known)) return known;
   for (const heading of doc.querySelectorAll?.('h1, h2, [role="heading"], span') || []) {
-    if (!visible(heading) || !/^(dados do contato|informações do contato|contact info|contact information)$/i.test(normalizeText(readText(heading)))) continue;
+    if (!visible(heading) || !/^(dados do contato|informações do contato|dados da empresa|informações da empresa|dados comerciais|contact info|contact information|business info|business information)$/i.test(normalizeText(readText(heading)))) continue;
     for (let node = heading.parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
       if (node.querySelector('#main')) break;
       if (closeInfoButton(node) && /\+?\d[\d ().-]{6,}\d/.test(readText(node))) return node;
@@ -101,14 +101,14 @@ export function sendButton(doc = document) {
     [...(doc.querySelectorAll?.('#main button, #main [role="button"]') || [])].find(node => visible(node) && /^(enviar|enviar mensagem|send|send message)$/i.test(node.getAttribute('aria-label') || ''));
 }
 function checkCancelled(cancelled) { if (cancelled()) throw failure('CANCELLED', 'A conversa foi alterada durante a preparação. Sequência pausada.'); }
-async function until(check, timeout, cancelled) {
+async function until(check, timeout, cancelled, expired = null) {
   const deadline = Date.now() + timeout;
   do {
     checkCancelled(cancelled);
     const value = check(); if (value) return value;
     await delay(250);
   } while (Date.now() < deadline);
-  throw failure('TIMEOUT', 'Não foi possível verificar a conversa. Confira o número, sua conexão e a sessão do WhatsApp.', true);
+  throw expired || failure('TIMEOUT', 'Não foi possível verificar a conversa. Confira o número, sua conexão e a sessão do WhatsApp.', true);
 }
 
 function replaceEditable(box, text, doc) {
@@ -160,14 +160,27 @@ function newChatButton(doc) {
   return doc.querySelector('[data-icon="new-chat-outline"], [data-icon="new-chat"], [data-icon="chat"]')?.closest('button, [role="button"]');
 }
 function contactSearch(doc) {
-  const candidates = [...doc.querySelectorAll('input, [contenteditable="true"][role="textbox"]')].filter(node =>
-    visible(node) && !node.closest('#main, #pluginwhat-panel-host'));
+  const candidates = [...doc.querySelectorAll('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"], [contenteditable=""]')].filter(node =>
+    visible(node) && !node.disabled && !node.readOnly && !node.closest('#main, #pluginwhat-panel-host') &&
+    (!node.matches?.('input') || /^(text|search|tel)$/i.test(node.type || 'text')));
   // Prefer the new-conversation field over the ordinary chat history search box.
-  return candidates.find(node => /(?:nome|name|número|number)/i.test(`${node.getAttribute('aria-label') || ''} ${node.getAttribute('placeholder') || ''}`)) ||
-    candidates.find(node => node.closest('[data-testid="drawer-left"], [data-testid="new-chat-drawer"], [role="dialog"]')) ||
+  return candidates.find(node => node.closest('[data-testid="drawer-left"], [data-testid="new-chat-drawer"], [role="dialog"]')) ||
+    candidates.find(node => /(?:nome|name|número|numero|number|contatos|contacts)/i.test(`${node.getAttribute('aria-label') || ''} ${node.getAttribute('placeholder') || ''}`)) ||
     (candidates.length === 1 ? candidates[0] : null);
 }
 const CONTACT_ROWS = '[role="listitem"], [role="row"], [data-testid="cell-frame-container"]';
+function contactRows(scope, search) {
+  if (!scope) return [];
+  const allowed = node =>
+    visible(node) && !node.closest?.('#main, header') && !node.contains?.(search) &&
+    !/^(convidar|invite|novo contato|new contact|novo grupo|new group)$/i.test(node.getAttribute?.('aria-label') || normalizeText(readText(node))) &&
+    !node.matches?.('[data-testid="invite-contact"]');
+  // A row can contain avatar/call/menu buttons. Keep the contact row itself.
+  const rows = [...scope.querySelectorAll(CONTACT_ROWS)].filter(allowed);
+  const candidates = rows.length ? rows : [...scope.querySelectorAll('[role="button"], button')].filter(allowed);
+  return candidates.filter(node => !candidates.some(other => other !== node && node.contains?.(other)));
+}
+function hasPhone(text) { return /\+?\d[\d ().-]{6,}\d/.test(String(text || '')); }
 function contactResultScope(search, doc) {
   const drawer = search.closest('[data-testid="drawer-left"], [data-testid="new-chat-drawer"], [role="dialog"]');
   if (drawer) return drawer;
@@ -175,37 +188,56 @@ function contactResultScope(search, doc) {
   // container rather than considering unrelated rows from the open conversation.
   for (let node = search.parentElement; node && node !== doc.documentElement; node = node.parentElement) {
     if (node.querySelector('#main')) break;
-    if (node.querySelector(CONTACT_ROWS)) return node;
+    if (node.querySelector(CONTACT_ROWS + ', [role="grid"], [role="list"]')) return node;
   }
   return null;
 }
 export async function openConversation(job, { doc = document, cancelled = () => false, timeout = 20000, onStage = async () => {} } = {}) {
   checkCancelled(cancelled);
+  const previousMain = doc.querySelector('#main'), previousHeader = previousMain?.querySelector('header');
+  const previousTitle = titleOf(previousHeader), previousKey = conversationKey(previousMain);
+  if (visible(composer(doc)) && visible(previousHeader) && !isGroup(previousMain) &&
+      (phoneIn(readText(previousHeader), job.phone) || phoneIn(previousTitle, job.phone))) return;
+  await onStage('opening');
   const button = newChatButton(doc);
   if (visible(button)) button.click();
   else if (!contactSearch(doc)) throw failure('CHAT_BUTTON_MISSING', 'O botão Nova conversa não foi encontrado. Confira o WhatsApp e retome.', true);
-  const search = await until(() => contactSearch(doc), timeout, cancelled);
-  replaceEditable(search, `+${job.phone}`, doc);
+  const search = await until(() => contactSearch(doc), timeout, cancelled,
+    failure('SEARCH_INPUT_NOT_FOUND', 'A busca Nova conversa abriu, mas o campo de pesquisar nome ou número não foi reconhecido. Nenhum envio foi realizado.', true));
+  const initialRows = new Map(contactRows(contactResultScope(search, doc), search).map(row => [row, normalizeText(readText(row))]));
+  await onStage('searching');
+  try { await fillComposer(search, `+${job.phone}`, doc, cancelled); }
+  catch (error) {
+    if (error.code === 'CANCELLED') throw error;
+    throw failure('SEARCH_INPUT_REJECTED', 'O campo Nova conversa não aceitou o número. Nenhum contato foi aberto e nenhum envio foi realizado.', true);
+  }
+  const searchedAt = Date.now();
   const result = await until(() => {
+    if (String(search.value ?? readText(search)).replace(/\D/g, '') !== job.phone) return null;
     const scope = contactResultScope(search, doc);
     const evidence = unregisteredEvidence(doc, job, scope);
     if (evidence) throw Object.assign(failure('UNREGISTERED', 'O WhatsApp confirmou que este número não está cadastrado.'), { evidence });
     if (!scope) return null;
-    const rows = [...scope.querySelectorAll(CONTACT_ROWS)].filter(node =>
-      visible(node) && !node.closest('#main') && !/^(convidar|invite)$/i.test(node.getAttribute?.('aria-label') || '') &&
-      !node.matches?.('[data-testid="invite-contact"]'));
-    // Collapse nested wrappers of the same result before considering a single saved contact.
-    const unique = rows.filter(node => !rows.some(other => other !== node && node.contains(other)));
-    const exact = unique.filter(node => phoneIn(node.innerText, job.phone) ||
+    if ([...(scope.querySelectorAll?.('[role="progressbar"], [aria-busy="true"]') || [])].some(visible)) return null;
+    const unique = contactRows(scope, search);
+    const exact = unique.filter(node => phoneIn(readText(node), job.phone) ||
       [...node.querySelectorAll('[title]')].some(title => phoneIn(title.getAttribute('title'), job.phone)));
     if (exact.length === 1) return exact[0];
     // A saved contact can show only a name. Its number is verified in prepare BEFORE writing.
-    return unique.length === 1 && unique[0];
-  }, timeout, cancelled);
+    const only = unique.length === 1 && unique[0];
+    return only && !hasPhone(readText(only)) && ![...only.querySelectorAll('[title]')].some(node => hasPhone(node.getAttribute('title'))) &&
+      (!initialRows.has(only) || initialRows.get(only) !== normalizeText(readText(only))) && Date.now() - searchedAt >= Math.min(500, timeout / 2) && only;
+  }, timeout, cancelled, failure('SEARCH_RESULT_NOT_FOUND', 'O número foi preenchido, mas o WhatsApp não apresentou um resultado seguro para abrir. Confira conexão e busca. O contato permanece na fila.', true));
   checkCancelled(cancelled);
+  await onStage('selecting');
   result.click();
   await onStage('editor');
-  try { await until(() => (!result.isConnected || !visible(result)) && visible(composer(doc)), timeout, cancelled); }
+  try { await until(() => {
+    const main = doc.querySelector('#main'), header = main?.querySelector('header');
+    return visible(composer(doc)) && visible(header) && ((!result.isConnected || !visible(result)) ||
+      main !== previousMain || header !== previousHeader || titleOf(header) !== previousTitle || conversationKey(main) !== previousKey ||
+      phoneIn(readText(header), job.phone) || phoneIn(titleOf(header), job.phone));
+  }, timeout, cancelled); }
   catch (error) {
     if (error.code === 'CANCELLED') throw error;
     throw failure('EDITOR_NOT_FOUND', 'O contato abriu, mas o campo de mensagem não foi localizado nesta versão do WhatsApp.', true);
@@ -241,15 +273,16 @@ export async function prepare(job, { doc = document, cancelled = () => false, ti
   if (!header) throw new Error('Cabeçalho da conversa não encontrado.');
   if (isGroup(main)) throw failure('GROUP_NOT_ALLOWED', 'A conversa aberta é um grupo ou canal. A sequência só permite contatos individuais.');
   let contactName = usableName(titleOf(header));
-  let verified = phoneIn(readText(header), job.phone);
+  let verified = phoneIn(readText(header), job.phone) || phoneIn(titleOf(header), job.phone);
   if (!verified) {
-    const trigger = header.querySelector('[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-info-header"], [title]') || header.querySelector('[role="button"]');
-    if (!trigger) throw new Error('Não foi possível abrir os dados do contato para conferir o número.');
+    const trigger = header.querySelector('[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-info-header"], span[title][dir="auto"], span[dir="auto"]') ||
+      header.querySelector('[aria-label="Dados do contato"], [aria-label="Informações do contato"], [aria-label="Dados da empresa"], [aria-label="Contact info"], [aria-label="Business info"]');
+    if (!trigger) throw failure('CONTACT_INFO_BUTTON_MISSING', 'A conversa abriu, mas o botão de dados do contato não foi reconhecido para conferir o número. Nenhuma mensagem foi enviada.');
     trigger.click();
     const drawer = await until(() => {
       const node = infoDrawer(doc);
-      return visible(node) && node;
-    }, Math.min(timeout, 8000), cancelled);
+      return visible(node) && hasPhone(readText(node)) && node;
+    }, Math.min(timeout, 15000), cancelled, failure('CONTACT_INFO_UNAVAILABLE', 'A conversa abriu, mas os dados do contato ou da empresa não mostraram o telefone para conferência. Nenhum envio foi realizado.', true));
     verified = phoneIn(readText(drawer), job.phone);
     if (!contactName) {
       const profile = drawer.querySelector('[data-testid="contact-info-name"], [data-testid="contact-info-drawer-name"]') ||

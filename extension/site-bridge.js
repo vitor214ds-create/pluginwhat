@@ -40,6 +40,7 @@ export function siteStatus(state) {
     nextAt: state.nextAt, notice: state.notice, intervalMs: state.intervalMs,
     queue: state.queue.map(row => ({ placeId: row.placeId, name: row.companyName, phone: row.phone,
       template: row.template, status: row.status, detail: row.detail, finishedAt: row.finishedAt,
+      errorCode: row.errorCode, lastStage: row.lastStage,
       document: row.attachment }))
   };
 }

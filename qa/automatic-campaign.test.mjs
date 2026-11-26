@@ -133,7 +133,7 @@ async function harness(t, { invalid = [], empty = [], noAck = false, dropReply =
       for (let flush = 0; flush < 30; flush++) await Promise.resolve();
     }
   }
-  const start = async () => { const response = await invoke({ type: 'START', config: { contacts: phones, messages: templateMessages, intervalSeconds: 120 } }, panelSender); assert.equal(response.ok, true); await advance(2000); };
+  const start = async () => { const response = await invoke({ type: 'START', config: { contacts: phones, messages: templateMessages, intervalSeconds: 120 } }, panelSender); assert.equal(response.ok, true); await advance(3000); };
   const restartWorker = async () => { worker = await import(`../extension/background.js?generation=${generation++}`); await worker.exclusive(async () => {}); };
   t.after(() => { scheduler.stop(); dom.window.close(); t.mock.timers.reset(); });
   return { doc, sent, local, alarms, chrome, start, advance, restartWorker, state: () => local[key] };
