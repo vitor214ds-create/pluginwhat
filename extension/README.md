@@ -93,7 +93,7 @@ Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.
 Também foram consultadas as especificações de [eventos de entrada](https://www.w3.org/TR/input-events-2/) e a documentação de [scripts de conteúdo do Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) para a interação com o editor.
 
 
-## Integração com SiteHunter — versão 1.4.2
+## Integração com SiteHunter — versão 1.4.3
 
 No site `https://zsites.lovable.app` (ou endereço anterior `https://site-scout-ai-90.lovable.app`), abra Busca e **Automatizar WhatsApp**. Atualize os arquivos na pasta já instalada e recarregue em `chrome://extensions` para conservar o ID. Atualize a aba do WhatsApp uma vez e conecte o plugin no site.
 
@@ -110,11 +110,11 @@ A integração envia **o arquivo HTML do botão Exportar site**, com as imagens 
 
 O canal externo permite apenas os dois domínios acima e localhost/127.0.0.1 para desenvolvimento. O site não fornece JWT/senha/chaves ao plugin. O documento não é executado pela extensão. A comunicação site-plugin usa APIs do Chrome; a automação do WhatsApp depende da interface externa e não é uma integração oficial da Meta. Use contatos autorizados.
 
-A versão 1.4.2 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.
+A versão 1.4.3 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.
 
-## Correção de anexos — 1.4.2
+## Correção de anexos — 1.4.3
 
-A versão 1.4.2 escolhe a opção **Documento** depois de abrir Anexar e aguarda o campo de arquivo criado por essa opção. Reconhece filtros `text/*`, a opção em português/inglês e campos criados com atraso. Havendo vários seletores, usa o campo associado à opção Documento ou o campo novo, em vez de escolher um seletor de foto arbitrário.
+A versão 1.4.3 escolhe a opção **Documento** depois de abrir Anexar e aguarda o campo de arquivo criado por essa opção. Reconhece filtros `text/*`, a opção em português/inglês e campos criados com atraso. Havendo vários seletores, usa o campo associado à opção Documento ou o campo novo, em vez de escolher um seletor de foto arbitrário.
 
 Se não houver campo acessível, tenta uma única soltura do arquivo no editor, seguindo a alternativa de arrastar documentos prevista pela interface Web. Eventos programáticos podem ser recusados por versões do WhatsApp; nesse caso a fila pausa. Depois de entregar o arquivo a um campo ou por soltura, não tenta uma segunda estratégia no mesmo preparo. Continua exigindo prévia do nome exato, legenda correta e confirmação na conversa correta.
 
@@ -123,3 +123,13 @@ O reconhecimento contempla legendas editáveis vazias, janela genérica de anexo
 Para atualizar, substitua os arquivos **na mesma pasta já instalada**, recarregue a extensão em `chrome://extensions` e atualize WhatsApp/site uma vez. Isso conserva o ID e os dados locais. Retome a sequência pausada depois de conferir a conversa; nenhuma nova campanha precisa ser criada apenas para atualizar o adaptador. Não use Remover nem Apagar dados locais se quiser conservar o progresso.
 
 Verificação reproduzível no repositório integrado: `node tests/attachment-browser.mjs` (30 cenários em Chromium) e `node tests/browser-integration.mjs` (site, documentos, download ZIP, fila e intervalos). Os resultados de entrega são controlados; nenhuma conta real do WhatsApp é usada. Consulte o registro de CI para o resultado da versão.
+
+## Busca de contatos — 1.4.3
+
+O erro em Nova conversa com campo vazio foi reproduzido antes da correção. O adaptador agora reconhece campos contenteditable true, plaintext-only e vazios, além de inputs de pesquisa. O preenchimento usa a mesma via de colagem/inserção do navegador e confere o número antes de procurar resultados.
+
+Resultados anteriores à pesquisa não são escolhidos como um contato novo. Linhas com outro telefone explícito são rejeitadas, inclusive quando há só um resultado. Resultados em botões e listas que permanecem na tela após abrir a conversa são contemplados. Uma conversa já aberta com o telefone correto pode ser reutilizada; a conferência do destinatário continua obrigatória antes de preencher ou anexar.
+
+A leitura dos dados inclui Dados da empresa/Business info. O adaptador não clica num botão genérico de chamada, vídeo ou menu para tentar abrir dados do contato. Falhas na busca e nos dados recebem códigos específicos. O site recebe etapa e código, sem expor tokens do job nem o HTML do documento. Não há navegação por link nem recarga entre contatos.
+
+Verificação: 10 regressões da busca, 12 cenários nativos completos de busca → conferência → documento → legenda → confirmação, além das suítes já existentes. O teste qa/extension-browser.mjs carrega a extensão Manifest V3 em um perfil limpo e usa IPC/IndexedDB reais; toda resposta de WhatsApp nesse teste é uma página controlada. Nenhuma conta real ou destinatário externo é usado. Consulte o CI para o resultado executado.

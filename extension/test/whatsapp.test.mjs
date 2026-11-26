@@ -77,7 +77,7 @@ test('saved contacts are checked against the contact info drawer, not their disp
 });
 
 test('opening a contact uses the native search and changes only the selected conversation', async () => {
-  const f = fixture(); const scope = { querySelectorAll: () => [row] };
+  const f = fixture(); f.header.innerText = '+5521912345678'; const scope = { querySelectorAll: selector => selector.includes('progressbar') ? [] : [row] };
   let newChatClicks = 0, rowClicks = 0;
   const search = element({ value: '', focus() {}, matches: () => true, dispatchEvent() {},
     getAttribute: name => name === 'aria-label' ? 'Pesquisar nome ou número' : null,

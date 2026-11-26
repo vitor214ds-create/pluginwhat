@@ -1,0 +1,70 @@
+<!doctype html><html lang="pt-BR"><meta charset="UTF-8"><title>Controlled WhatsApp conversation fixture</title><body><script>
+window.resetQA=(mode='plaintext')=>{
+ document.body.innerHTML='<div id="pane-side"><button aria-label="Nova conversa">Nova conversa</button></div><main id="main"></main>';
+ Object.assign(window,{qaSelected:0,qaWrongSelections:0,qaWrites:[],qaSends:[],qaFiles:[],qaStages:[]});
+ const make=(tag,attrs={},text='')=>{const n=document.createElement(tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,v);n.textContent=text;return n;};
+ const phone='5511912345678',other='5521912345678';
+ const bubble=(number,file,text)=>{
+  const b=make('div',{class:'message-out','data-id':'true_'+number+'@c.us_'+crypto.randomUUID()});
+  if(file)b.append(make('span',{'data-testid':'document-title',title:file.name},file.name));
+  b.append(make('span',{'data-testid':'msg-text',class:'selectable-text'},text),make('span',{'data-icon':'msg-check'}));document.querySelector('#main').append(b);
+ };
+ function chat(number){
+  const main=document.querySelector('#main');main.replaceChildren();
+  const business=mode==='business'||mode==='extension';
+  const header=make('header'),title=make('span',{title:business?'Empresa de teste':'+'+number,dir:'auto'},business?'Empresa de teste':'+'+number);
+  title.onclick=()=>{const panel=make('aside'),close=make('button',{'aria-label':'Fechar'},'Fechar');close.onclick=()=>panel.remove();panel.append(make('h2',{},'Dados da empresa'),close,make('p',{},'Telefone: +'+number));document.body.append(panel);};
+  header.append(title);main.append(header);
+  const footer=make('footer'),box=make('div',{contenteditable:'true',role:'textbox',tabindex:'0','aria-label':'Digite uma mensagem'}),send=make('button',{'aria-label':'Enviar'},'Enviar');
+  send.onclick=()=>{qaSends.push({number,text:box.innerText,at:Date.now()});bubble(number,null,box.innerText);box.innerText='';};
+  const input=make('input',{type:'file',accept:'text/html',hidden:''});
+  input.onchange=()=>{
+   const file=input.files[0];qaFiles.push(file);
+   const preview=make('section',{role:'dialog','data-testid':'document-preview'}),caption=make('textarea',{'aria-label':'Legenda'}),button=make('button',{'aria-label':'Enviar documento'},'Enviar documento');
+   button.onclick=()=>{qaSends.push({number,text:caption.value,fileName:file.name,size:file.size,at:Date.now()});bubble(number,file,caption.value);preview.remove();input.remove();};
+   preview.append(make('span',{title:file.name},file.name),caption,button);document.body.append(preview);
+  };
+  footer.append(box,send,input);main.append(footer);
+ }
+ document.querySelector('[aria-label="Nova conversa"]').onclick=()=>{
+  document.querySelector('[data-testid="drawer-left"]')?.remove();
+  const panel=make('aside',{'data-testid':'drawer-left'}),grid=make('div',{role:'grid'});
+  const editable=mode==='empty-editable'?'':mode==='regular'?'true':'plaintext-only';
+  const search=mode==='input'?make('input',{type:'search'}):make('div',{contenteditable:editable,role:'textbox',tabindex:'0'});
+  search.id='search';search.setAttribute('aria-label','Pesquisar nome ou número');panel.append(search,grid);document.body.append(panel);
+  const results=()=>{
+   const value=search.value??search.innerText;qaWrites.push(value);
+   setTimeout(()=>{
+    grid.replaceChildren();if(mode==='no-result'||!value.trim())return;
+    const number=mode==='wrong-result'?other:value.replace(/\D/g,'');
+    const row=make('div',{role:mode==='button-result'||mode==='extension'?'button':'row',tabindex:'0'},'+'+number);
+    if(mode==='nested-controls'){const avatar=make('button',{'aria-label':'Foto do contato'},'Foto');avatar.onclick=event=>{event.stopPropagation();qaWrongSelections++;};row.append(avatar);}
+    row.onclick=()=>{qaSelected++;if(number!==phone&&mode!=='extension')qaWrongSelections++;if(mode!=='persistent-result')panel.remove();chat(number);};grid.append(row);
+   },mode==='stale-result'?650:120);
+  };
+  search.addEventListener('input',results);
+  if(mode==='controlled'){
+   const original=document.execCommand.bind(document);
+   document.execCommand=(...args)=>document.activeElement===search?false:original(...args);
+   search.addEventListener('paste',event=>{event.preventDefault();search.innerText=event.clipboardData.getData('text/plain');results();});
+  }
+  if(mode==='stale-result'){
+   const old=make('div',{role:'row'},'Cliente anterior');old.onclick=()=>{qaWrongSelections++;panel.remove();chat(other);};grid.append(old);
+  }
+ };
+ if(mode==='already-open')chat(phone);
+};
+window.resetQA(new URLSearchParams(location.search).get('mode')||'plaintext');
+window.qaRun=async mode=>{
+ resetQA(mode);const {openConversation,prepare,sendPrepared}=await import('/adapter/whatsapp.js');
+ const file=new File(['<!doctype html><title>Prévia individual</title><p>Documento completo</p>'],'Empresa-previa.html',{type:'text/html'});
+ const sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))].map(n=>n.toString(16).padStart(2,'0')).join('');
+ const job={phone:'5511912345678',message:'Bom dia (nome)!',attachment:{id:crypto.randomUUID(),name:file.name,mime:file.type,size:file.size,sha256}};
+ const options={doc:document,timeout:1800,onStage:async stage=>qaStages.push(stage)};
+ try{
+  await openConversation(job,options);const snapshot=await prepare(job,{...options,fillMessage:true,attachmentFile:file});
+  const evidence=await sendPrepared({...job,message:snapshot.message},snapshot,options);
+  return {ok:true,evidence,sends:qaSends,selected:qaSelected,wrongSelections:qaWrongSelections,writes:qaWrites,stages:qaStages,fileText:await qaFiles[0]?.text()};
+ }catch(error){return {ok:false,code:error.code,message:error.message,sends:qaSends,selected:qaSelected,wrongSelections:qaWrongSelections,writes:qaWrites,stages:qaStages};}
+};
+</script></body></html>

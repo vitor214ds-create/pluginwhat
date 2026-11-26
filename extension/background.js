@@ -7,7 +7,7 @@ const documentOwner = source => `${source.origin}|${source.clientId}`;
 
 const ALARM = 'pluginwhat-next';
 const WATCHDOG = 'pluginwhat-watchdog';
-const STAGES = { attaching: 'Anexando o documento HTML da empresa', editor: 'Localizando o campo de mensagem', verifying: 'Conferindo o número e o nome do contato', filling: 'Preenchendo a mensagem', ready: 'Mensagem preenchida; preparando envio', clicking: 'Acionando o botão Enviar', confirming: 'Aguardando a confirmação do WhatsApp' };
+const STAGES = { opening: 'Abrindo a busca Nova conversa', searching: 'Preenchendo e pesquisando o número', selecting: 'Abrindo o contato encontrado', attaching: 'Anexando o documento HTML da empresa', editor: 'Localizando o campo de mensagem', verifying: 'Conferindo o número e o nome do contato', filling: 'Preenchendo a mensagem', ready: 'Mensagem preenchida; preparando envio', clicking: 'Acionando o botão Enviar', confirming: 'Aguardando a confirmação do WhatsApp' };
 let serial = Promise.resolve();
 // Every mutation and alarm is serialized. No long-running timers live in the worker.
 export function exclusive(operation) {
