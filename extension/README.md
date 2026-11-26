@@ -93,7 +93,7 @@ Referências oficiais consultadas: [alarmes do Chrome](https://developer.chrome.
 Também foram consultadas as especificações de [eventos de entrada](https://www.w3.org/TR/input-events-2/) e a documentação de [scripts de conteúdo do Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts) para a interação com o editor.
 
 
-## Integração com SiteHunter — versão 1.4.1
+## Integração com SiteHunter — versão 1.4.2
 
 No site `https://zsites.lovable.app` (ou endereço anterior `https://site-scout-ai-90.lovable.app`), abra Busca e **Automatizar WhatsApp**. Atualize os arquivos na pasta já instalada e recarregue em `chrome://extensions` para conservar o ID. Atualize a aba do WhatsApp uma vez e conecte o plugin no site.
 
@@ -110,4 +110,16 @@ A integração envia **o arquivo HTML do botão Exportar site**, com as imagens 
 
 O canal externo permite apenas os dois domínios acima e localhost/127.0.0.1 para desenvolvimento. O site não fornece JWT/senha/chaves ao plugin. O documento não é executado pela extensão. A comunicação site-plugin usa APIs do Chrome; a automação do WhatsApp depende da interface externa e não é uma integração oficial da Meta. Use contatos autorizados.
 
-A versão 1.4.1 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.
+A versão 1.4.2 foi testada com arquivos, campos e eventos nativos do Chromium e respostas controladas do WhatsApp. O aceite integral numa conta real permanece necessário; nenhuma mensagem real foi enviada nesses testes.
+
+## Correção de anexos — 1.4.2
+
+A versão 1.4.2 escolhe a opção **Documento** depois de abrir Anexar e aguarda o campo de arquivo criado por essa opção. Reconhece filtros `text/*`, a opção em português/inglês e campos criados com atraso. Havendo vários seletores, usa o campo associado à opção Documento ou o campo novo, em vez de escolher um seletor de foto arbitrário.
+
+Se não houver campo acessível, tenta uma única soltura do arquivo no editor, seguindo a alternativa de arrastar documentos prevista pela interface Web. Eventos programáticos podem ser recusados por versões do WhatsApp; nesse caso a fila pausa. Depois de entregar o arquivo a um campo ou por soltura, não tenta uma segunda estratégia no mesmo preparo. Continua exigindo prévia do nome exato, legenda correta e confirmação na conversa correta.
+
+O reconhecimento contempla legendas editáveis vazias, janela genérica de anexo, botões Enviar arquivo/documento e ícone send-light. Uma mensagem de texto, documento citado, elemento oculto ou tique antigo não confirmam um documento novo. Rascunho existente, anexo já aberto, cancelamento e mudança de conversa continuam bloqueando o clique.
+
+Para atualizar, substitua os arquivos **na mesma pasta já instalada**, recarregue a extensão em `chrome://extensions` e atualize WhatsApp/site uma vez. Isso conserva o ID e os dados locais. Retome a sequência pausada depois de conferir a conversa; nenhuma nova campanha precisa ser criada apenas para atualizar o adaptador. Não use Remover nem Apagar dados locais se quiser conservar o progresso.
+
+Verificação reproduzível no repositório integrado: `node tests/attachment-browser.mjs` (30 cenários em Chromium) e `node tests/browser-integration.mjs` (site, documentos, download ZIP, fila e intervalos). Os resultados de entrega são controlados; nenhuma conta real do WhatsApp é usada. Consulte o registro de CI para o resultado da versão.

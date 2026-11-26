@@ -341,22 +341,110 @@ export async function sendPrepared(job, snapshot, { doc = document, cancelled = 
 
 
 function editableText(node) { return node?.matches?.('input, textarea') ? node.value : readText(node); }
-function documentInput(doc) {
-  const candidates = [...doc.querySelectorAll('input[type="file"]')].filter(input => {
-    const accept = (input.getAttribute('accept') || '').toLowerCase().split(',').map(s => s.trim());
-    return !input.disabled && (accept.every(s => !s) || accept.includes('*') || accept.includes('*/*') || accept.includes('.html') || accept.includes('text/html'));
-  });
-  return candidates.find(input => input.closest('[data-testid="attach-document"], [aria-label="Documento"], [aria-label="Document"]')) || (candidates.length === 1 ? candidates[0] : null);
+function acceptsDocument(input, file) {
+  if (input.disabled) return false;
+  const accept = (input.getAttribute('accept') || '').toLowerCase().split(',').map(value => value.trim()).filter(Boolean);
+  if (!accept.length || accept.includes('*') || accept.includes('*/*')) return true;
+  const extension = '.' + file.name.split('.').at(-1).toLowerCase();
+  return accept.includes(extension) || accept.includes(file.type.toLowerCase()) ||
+    accept.some(type => type.endsWith('/*') && file.type.toLowerCase().startsWith(type.slice(0, -1)));
+}
+function documentInput(doc, file, { scope = null, previous = null } = {}) {
+  const candidates = [...doc.querySelectorAll('input[type="file"]')].filter(input => acceptsDocument(input, file));
+  if (scope) {
+    const associated = scope.getAttribute?.('for') ? doc.getElementById(scope.getAttribute('for')) : null;
+    const scoped = candidates.filter(input => scope.contains(input) || input === associated);
+    if (scoped.length === 1) return scoped[0];
+  }
+  const explicit = candidates.filter(input => input.closest('[data-testid="attach-document"], [aria-label="Documento"], [aria-label="Document"], [data-testid="attach-menu-document"]'));
+  if (explicit.length === 1) return explicit[0];
+  if (previous) {
+    const added = candidates.filter(input => !previous.has(input));
+    if (added.length === 1) return added[0];
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+function documentMenuItem(doc) {
+  const names = /^(documento|documentos|document|documents|anexar documento|attach document)$/i;
+  const controls = [...doc.querySelectorAll('button, [role="button"], [role="menuitem"], label, li')].filter(node =>
+    visible(node) && !node.closest('.message-in, .message-out, #pane-side, #main > header, #pluginwhat-panel-host') &&
+    [node.getAttribute('aria-label'), node.getAttribute('title'), readText(node)].some(value => names.test(normalizeText(value))));
+  const inner = controls.filter(node => !controls.some(other => other !== node && node.contains(other)));
+  return inner.length === 1 ? inner[0] : null;
+}
+async function locateDocumentInput(doc, file, identity, cancelled, timeout) {
+  let input = documentInput(doc, file);
+  if (input) return input;
+  let option = documentMenuItem(doc);
+  if (!option) {
+    const main = doc.querySelector('#main');
+    const trigger = main?.querySelector('footer [aria-label="Anexar"], footer [aria-label="Attach"], footer [title="Anexar"], footer [title="Attach"]') ||
+      main?.querySelector('footer [data-icon="plus"], footer [data-icon="clip"], footer [data-icon="attach-menu-plus"], footer [data-icon="wds-ic-plus-rounded"]')?.closest('button, [role="button"]');
+    if (visible(trigger)) {
+      trigger.click();
+      try {
+        await until(() => documentInput(doc, file) || documentMenuItem(doc), Math.min(timeout, 1500), cancelled);
+      } catch (error) { if (error.code === 'CANCELLED') throw error; }
+    }
+    input = documentInput(doc, file); option = documentMenuItem(doc);
+    if (input) return input;
+  }
+  if (!option) return null;
+  // Choosing Document can create the input lazily. Wait out transient activation
+  // so the application's own input.click() cannot open a native system picker.
+  const activatedAt = Date.now();
+  while (doc.defaultView?.navigator?.userActivation?.isActive && Date.now() - activatedAt < 6000) {
+    checkCancelled(cancelled); await delay(100);
+  }
+  checkCancelled(cancelled);
+  if (doc.defaultView?.navigator?.userActivation?.isActive) return null;
+  if (!sameConversation(identity, doc)) throw failure('RECIPIENT_MISMATCH', 'A conversa mudou antes de escolher Documento.');
+  const previous = new Set(doc.querySelectorAll('input[type="file"]'));
+  option.click();
+  try {
+    return await until(() => documentInput(doc, file, { scope: option, previous }), Math.min(timeout, 1500), cancelled);
+  } catch (error) { if (error.code === 'CANCELLED') throw error; return null; }
+}
+async function dropDocumentFile(doc, file, identity, cancelled) {
+  const view = doc.defaultView, target = composer(doc);
+  if (!view?.DataTransfer || !view?.DragEvent || !visible(target)) throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'O WhatsApp não disponibilizou seleção nem soltura de documento nesta conversa. Nenhum envio foi realizado.');
+  if (!sameConversation(identity, doc)) throw failure('RECIPIENT_MISMATCH', 'A conversa mudou antes de anexar o documento.');
+  const transfer = new view.DataTransfer(); transfer.items.add(file);
+  transfer.effectAllowed = 'copy'; transfer.dropEffect = 'copy';
+  const bounds = target.getBoundingClientRect();
+  const options = { bubbles: true, cancelable: true, composed: true, dataTransfer: transfer,
+    clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2 };
+  target.dispatchEvent(new view.DragEvent('dragenter', options));
+  await delay(50); checkCancelled(cancelled);
+  target.dispatchEvent(new view.DragEvent('dragover', options));
+  await delay(50); checkCancelled(cancelled);
+  if (!sameConversation(identity, doc)) throw failure('RECIPIENT_MISMATCH', 'A conversa mudou durante a preparação do documento.');
+  // Exactly one drop. Never choose a second upload strategy after dispatching file bytes.
+  target.dispatchEvent(new view.DragEvent('drop', options));
 }
 function scopedSend(scope) {
-  const icons = [...scope.querySelectorAll('[data-icon="send"], [data-icon="wds-ic-send-filled"]')];
-  return icons.map(icon => icon.closest('button, [role="button"]')).find(visible) || [...scope.querySelectorAll('button, [role="button"]')].find(button => visible(button) && /^(enviar|send|enviar mensagem|send message)$/i.test(button.getAttribute('aria-label') || ''));
+  const icons = [...scope.querySelectorAll('[data-icon="send"], [data-icon="wds-ic-send-filled"], [data-icon="send-light"], [data-icon="wds-ic-send"]')];
+  return icons.map(icon => icon.closest('button, [role="button"]')).find(visible) || [...scope.querySelectorAll('button, [role="button"]')].find(button => visible(button) && /^(enviar|send|enviar mensagem|send message|enviar documento|send document|enviar arquivo|send file)$/i.test(button.getAttribute('aria-label') || ''));
 }
 function captionBox(scope) {
-  return [...scope.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"], textarea, input[type="text"]')].filter(visible).find(node => /legenda|caption|mensagem|message/i.test(node.getAttribute('aria-label') || node.getAttribute('placeholder') || '') || node.matches('[data-lexical-editor], [role="textbox"], textarea'));
+  return [...scope.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"], [contenteditable=""], textarea, input[type="text"]')].filter(visible).find(node => /legenda|caption|mensagem|message/i.test(node.getAttribute('aria-label') || node.getAttribute('placeholder') || '') || node.matches('[data-lexical-editor], [role="textbox"], textarea'));
+}
+function visibleAttachmentPart(node) {
+  const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+  return visible(node) && style?.visibility !== 'hidden' && style?.visibility !== 'collapse' &&
+    (!node.checkVisibility || node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) &&
+    !node.closest('[data-testid*="quoted"], [data-testid*="quote"], blockquote');
 }
 function containsFileName(scope, name) {
-  return [...scope.querySelectorAll('[title], [data-testid="document-title"], span, div')].some(node => (scope.closest('.message-out, .message-in') || !node.closest('.message-out, .message-in')) && (node.getAttribute('title') === name || normalizeText(readText(node)) === name));
+  return [...scope.querySelectorAll('[title], [data-testid="document-title"], span, div, a[download]')].some(node =>
+    visibleAttachmentPart(node) && (scope.closest('.message-out, .message-in') || !node.closest('.message-out, .message-in')) &&
+    (node.getAttribute('title') === name || node.getAttribute('download') === name || normalizeText(readText(node)) === name));
+}
+function outgoingDocumentMatches(node, name, message) {
+  const documentPart = [...node.querySelectorAll('[data-testid*="document"], [data-icon="document"], [data-icon^="doc-"], [class*="icon-doc-"], a[download]')].some(visibleAttachmentPart);
+  const caption = [...node.querySelectorAll('[data-testid="msg-text"], .selectable-text')].some(part =>
+    visibleAttachmentPart(part) && normalizeText(readText(part)) === normalizeText(message));
+  return documentPart && caption && containsFileName(node, name);
 }
 function attachmentPreview(doc, name) {
   const selectors = '[data-testid="media-editor"], [data-testid="document-preview"], [data-testid="media-preview"], [role="dialog"], [data-animate-modal-popup]';
@@ -377,24 +465,23 @@ async function prepareDocument(job, identity, file, { doc, cancelled, timeout, o
   checkCancelled(cancelled);
   if (file.name !== job.attachment.name || file.size !== job.attachment.size || file.type !== 'text/html') throw failure('DOCUMENT_MISMATCH', 'O arquivo não corresponde à prévia desta empresa.');
   if (normalizeText(readText(composer(doc)))) throw failure('EXISTING_DRAFT', 'Esta conversa já tem um rascunho. Confira antes de anexar o documento.');
-  if ([...doc.querySelectorAll('[data-testid="media-editor"], [data-testid="document-preview"], [data-testid="media-preview"]')].some(visible)) throw failure('EXISTING_ATTACHMENT', 'Já existe um anexo aberto. Confira a conversa antes de retomar.');
+  const openAttachment = [...doc.querySelectorAll('[data-testid="media-editor"], [data-testid="document-preview"], [data-testid="media-preview"], [role="dialog"], [data-animate-modal-popup]')].some(scope =>
+    visible(scope) && !scope.querySelector('#pane-side, #main > header') && (scope.matches('[data-testid="media-editor"], [data-testid="document-preview"], [data-testid="media-preview"]') || (scopedSend(scope) && captionBox(scope))));
+  if (openAttachment) throw failure('EXISTING_ATTACHMENT', 'Já existe um anexo aberto. Confira a conversa antes de retomar.');
   await onStage('attaching');
-  let input = documentInput(doc);
-  if (!input) {
-    const main = doc.querySelector('#main');
-    const trigger = main.querySelector('footer [aria-label="Anexar"], footer [aria-label="Attach"], footer [title="Anexar"], footer [title="Attach"]') || main.querySelector('footer [data-icon="plus"], footer [data-icon="clip"], footer [data-icon="attach-menu-plus"]')?.closest('button, [role="button"]');
-    if (!visible(trigger)) throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'O botão de anexar documento não foi localizado. Nenhuma mensagem foi enviada.');
-    trigger.click();
-    try { input = await until(() => documentInput(doc), Math.min(timeout, 8000), cancelled); }
-    catch (error) { if (error.code === 'CANCELLED') throw error; throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'O campo de anexar documento não ficou disponível nesta versão do WhatsApp. Nenhum envio foi realizado.'); }
-  }
+  const input = await locateDocumentInput(doc, file, identity, cancelled, timeout);
   if (!sameConversation(identity, doc)) throw failure('RECIPIENT_MISMATCH', 'A conversa mudou antes de anexar o arquivo.');
   const view = doc.defaultView;
-  if (!view?.DataTransfer) throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'Este navegador não disponibilizou a seleção de documentos.');
-  const transfer = new view.DataTransfer(); transfer.items.add(file);
-  input.files = transfer.files;
-  if (input.files.length !== 1 || input.files[0].name !== file.name || input.files[0].size !== file.size) throw failure('DOCUMENT_MISMATCH', 'O navegador não selecionou o documento correto.');
-  input.dispatchEvent(new view.Event('change', { bubbles: true }));
+  if (input) {
+    if (!view?.DataTransfer) throw failure('DOCUMENT_INPUT_UNAVAILABLE', 'Este navegador não disponibilizou a seleção de documentos.');
+    const transfer = new view.DataTransfer(); transfer.items.add(file);
+    input.files = transfer.files;
+    if (input.files.length !== 1 || input.files[0].name !== file.name || input.files[0].size !== file.size) throw failure('DOCUMENT_MISMATCH', 'O navegador não selecionou o documento correto.');
+    input.dispatchEvent(new view.Event('input', { bubbles: true }));
+    input.dispatchEvent(new view.Event('change', { bubbles: true }));
+  } else {
+    await dropDocumentFile(doc, file, identity, cancelled);
+  }
   let preview;
   try { preview = await until(() => attachmentPreview(doc, file.name), Math.min(timeout, 20000), cancelled); }
   catch (error) { if (error.code === 'CANCELLED') throw error; throw failure('DOCUMENT_PREVIEW_UNAVAILABLE', 'O WhatsApp não preparou o documento com legenda. Confira o formato e a conversa. Nenhum envio foi realizado.'); }
@@ -435,10 +522,10 @@ async function sendDocumentPrepared(job, snapshot, { doc, cancelled, timeout, on
     if (!sameConversation(snapshot, doc)) throw failure('CONVERSATION_CHANGED', 'A conversa mudou após o clique do documento. Confira o envio.');
     const fresh = outgoing(doc.querySelector('#main')).filter(node => {
       const id = messageId(node);
-      return (id ? !beforeIds.has(id) : !before.includes(node)) && containsFileName(node, job.attachment.name) && messageMatches(node, job.message);
+      return (id ? !beforeIds.has(id) : !before.includes(node)) && outgoingDocumentMatches(node, job.attachment.name, job.message);
     }).at(-1);
     const ack = fresh?.querySelector('[data-icon="msg-check"], [data-icon="msg-dblcheck"], [data-icon="msg-dblcheck-ack"], [data-testid="msg-check"], [data-testid="msg-dblcheck"]');
-    if (ack && !visible(preview)) {
+    if (ack && visibleAttachmentPart(ack) && !visible(preview)) {
       evidence = { confirmed: true, messageId: messageId(fresh), fileName: job.attachment.name, attachmentHash: job.attachment.sha256 };
       return true;
     }

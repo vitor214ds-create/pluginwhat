@@ -1,0 +1,87 @@
+<!doctype html><html><meta charset="UTF-8"><title>Local document adapter fixture</title><body><script type="module">
+const BODY='<!doctype html><html lang="pt-BR"><title>Empresa</title><p>Prévia completa</p></html>';
+window.resetWA=(mode='ok')=>{
+ document.body.innerHTML='<div id="pane-side">Conversas</div><div id="main"><header><span title="+5511912345678">+5511912345678</span></header><section id="messages"></section><footer><div role="textbox" contenteditable="true" aria-label="Digite uma mensagem"></div><button aria-label="Anexar">+</button></footer></div>';
+ Object.assign(window,{qaClicks:0,qaFiles:[],qaDrops:0,qaDocumentOptionClicks:0,qaWrongInput:0});
+ const bubble=(id,filename,text,clock=false)=>{
+  const node=document.createElement('div');node.className='message-out';node.dataset.id='true_5511912345678@c.us_'+id;
+  const title=document.createElement('span');title.dataset.testid='document-title';title.title=filename;title.textContent=filename;
+  const part=document.createElement('span');part.dataset.testid='msg-text';part.className='selectable-text';part.textContent=text;
+  const tick=document.createElement('span');tick.dataset.icon=clock?'msg-time':'msg-check';node.append(title,part,tick);document.querySelector('#messages').append(node);
+  return {node,title,part,tick};
+ };
+ const preview=file=>{
+  window.qaFiles.push(file);
+  if(mode==='no-preview')return;
+  const modal=document.createElement('div');modal.role='dialog';if(mode!=='generic-preview')modal.dataset.testid='document-preview';
+  const name=document.createElement('span');name.textContent=file.name;name.title=file.name;
+  const editable=['editable-empty','editable-plain'].includes(mode);
+  const caption=document.createElement(editable?'div':'textarea');caption.setAttribute('aria-label','Legenda');
+  if(editable){caption.setAttribute('contenteditable',mode==='editable-empty'?'':'plaintext-only');caption.setAttribute('role','textbox');}
+  const button=document.createElement('button');
+  if(mode==='send-light'){const icon=document.createElement('span');icon.dataset.icon='send-light';icon.textContent='➤';button.append(icon);}
+  else{button.setAttribute('aria-label',mode==='send-file'?'Enviar arquivo':'Enviar');button.textContent='Enviar documento';}
+  modal.append(name,caption,button);document.body.append(modal);
+  if(mode==='old-clock')bubble('OLD',file.name,'Bom dia Maria!');
+  const send=()=>{
+   window.qaClicks++;
+   const {node,title,tick}=bubble('NEW',mode==='wrong-file'?'outro.html':file.name,editable?caption.innerText:caption.value,mode==='old-clock');
+   if(mode==='plain-text')title.remove();
+   if(mode==='quoted-document'){const quote=document.createElement('blockquote');title.replaceWith(quote);quote.append(title);}
+   if(mode==='hidden-document')title.style.visibility='hidden';
+   if(mode==='hidden-tick')tick.style.visibility='hidden';
+   if(mode==='contact-after-click')document.querySelector('header span').title='+5521912345678';
+   modal.remove();
+  };
+  if(mode==='pointer-only')button.onpointerup=send;else button.onclick=send;
+ };
+ const createInput=(accept='*/*',parent=document.body)=>{
+  const input=document.createElement('input');input.type='file';input.accept=accept;input.hidden=true;parent.append(input);
+  input.onchange=()=>preview(input.files[0]);return input;
+ };
+ const addDecoy=()=>{
+  const input=document.createElement('input');input.type='file';input.hidden=true;input.accept=mode==='multiple-inputs'?'image/*,video/*':'*/*';input.onchange=()=>window.qaWrongInput++;document.body.append(input);
+ };
+ if(mode==='existing-input')createInput();
+ if(['multiple-inputs','scoped-input'].includes(mode)){addDecoy();if(mode==='scoped-input')addDecoy();}
+ const attach=document.querySelector('[aria-label="Anexar"]');
+ attach.onclick=()=>{
+  if(['drop-only','no-input'].includes(mode))return;
+  if(['document-menu','document-menu-en','delayed-input','multiple-inputs','scoped-input'].includes(mode)){
+   const menu=document.createElement('div');menu.setAttribute('role','menu');
+   const option=document.createElement('button');option.setAttribute('role','menuitem');option.textContent=mode==='document-menu-en'?'Document':'Documento';
+   option.onclick=()=>{
+    window.qaDocumentOptionClicks++;
+    const make=()=>{createInput('*/*',mode==='scoped-input'?option:document.body);if(mode!=='scoped-input')menu.remove();};
+    if(mode==='delayed-input')setTimeout(make,180);else make();
+   };menu.append(option);document.body.append(menu);
+  }else createInput(mode==='text-accept'?'IMAGE/*, TEXT/*':'*/*');
+ };
+ if(mode==='drop-no-trigger')attach.remove();
+ if(['drop-only','drop-no-trigger'].includes(mode)){
+  const target=document.querySelector('footer [contenteditable]');
+  target.ondragover=event=>event.preventDefault();
+  target.ondrop=event=>{event.preventDefault();window.qaDrops++;preview(event.dataTransfer.files[0]);};
+ }
+ if(mode==='draft')document.querySelector('[contenteditable]').innerText='Rascunho existente';
+ if(mode==='existing-dialog'){
+  const modal=document.createElement('div');modal.role='dialog';
+  modal.innerHTML='<textarea aria-label="Legenda"></textarea><button aria-label="Enviar">Enviar</button>';document.body.append(modal);
+ }
+};
+window.resetWA();
+window.qaDocumentCase=async mode=>{
+ window.resetWA(mode);const {prepare,sendPrepared}=await import(/* @vite-ignore */ location.origin+'/pluginwhat/whatsapp.js');
+ const file=new File([BODY],'Empresa-previa.html',{type:'text/html'});
+ const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))].map(v=>v.toString(16).padStart(2,'0')).join('');
+ const job={phone:'5511912345678',message:mode==='plain-text'?file.name:'Bom dia Maria!',attachment:{id:crypto.randomUUID(),name:file.name,mime:'text/html',size:file.size,sha256:hash}};
+ const details=async()=>({clicks:window.qaClicks,selected:window.qaFiles.length,drops:window.qaDrops,menuClicks:window.qaDocumentOptionClicks,wrongInput:window.qaWrongInput,fileName:window.qaFiles[0]?.name,fileText:await window.qaFiles[0]?.text()});
+ try{
+  const snapshot=await prepare(job,{doc:document,attachmentFile:file,fillMessage:true,timeout:900});
+  if(mode==='caption-changed')snapshot.box.value='Texto diferente';
+  if(mode==='conversation-changed')document.querySelector('header span').title='+5521912345678';
+  const evidence=await sendPrepared(job,snapshot,{doc:document,timeout:350,cancelled:()=>mode==='cancelled'});
+  return {ok:true,evidence,...await details()};
+ }catch(error){return {ok:false,code:error.code,message:error.message,...await details()};}
+};
+</script></body></html>
