@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {openConversation,prepare,sendPrepared} from '../extension/whatsapp.js';
 const phone='5511912345678',other='5521912345678';
-function fixture(t,{editable='true',rowRole='row',controlled=false,business=false,persistent=false,already=false,empty=false,wrong=false,stale=false}={}){
+function fixture(t,{editable='true',rowRole='row',controlled=false,business=false,persistent=false,already=false,empty=false,wrong=false,stale=false,prefilled=false}={}){
  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000000});
  const dom=new JSDOM('<!doctype html><div id="pane-side"><button aria-label="Nova conversa">Nova conversa</button></div><main id="main"></main>',{url:'https://web.whatsapp.com/'}),doc=dom.window.document;
  Object.defineProperty(dom.window.HTMLElement.prototype,'getClientRects',{value(){return this.isConnected&&!this.closest('[hidden]')?[{}]:[];}});
@@ -23,6 +23,7 @@ function fixture(t,{editable='true',rowRole='row',controlled=false,business=fals
   const panel=node('aside',{'data-testid':'drawer-left'}),search=node('div',{id:'search',contenteditable:editable,role:'textbox',tabindex:'0','aria-label':'Pesquisar nome ou número'}),grid=node('div',{role:'grid'});panel.append(search,grid);doc.body.append(panel);
   function results(){setTimeout(()=>{grid.replaceChildren();if(empty)return;const row=node('div',{role:rowRole,tabindex:'0'},'+'+(wrong?other:phone));row.onclick=()=>{selected++;if(wrong)wrongClicks++;if(!persistent)panel.remove();chat(wrong?other:phone);};grid.append(row);},stale?700:100);}
   search.addEventListener('input',results);search.addEventListener('paste',e=>{if(!controlled)return;e.preventDefault();search.textContent=e.clipboardData.getData('text/plain');results();});
+  if(prefilled){search.textContent='+'+phone;const row=node('div',{role:'row'},'Maria');row.onclick=()=>{selected++;panel.remove();chat(phone);};grid.append(row);}
   if(stale){const old=node('div',{role:rowRole},'Contato anterior');old.onclick=()=>{selected++;wrongClicks++;panel.remove();chat(other);};grid.append(old);}
  };
  if(already)chat(phone);
@@ -30,7 +31,7 @@ function fixture(t,{editable='true',rowRole='row',controlled=false,business=fals
  async function run(operation){let done=false,result,error;operation.then(v=>{done=true;result=v;},e=>{done=true;error=e;});for(let n=0;n<80&&!done;n++){t.mock.timers.tick(250);for(let k=0;k<30;k++)await Promise.resolve();}if(!done)throw Error('Fixture did not settle');if(error)throw error;return result;}
  return{doc,run,clicks:()=>clicks,selected:()=>selected,wrongClicks:()=>wrongClicks};
 }
-for(const [name,options]of Object.entries({plaintext:{editable:'plaintext-only'},emptyEditable:{editable:''},controlled:{controlled:true},buttonRow:{rowRole:'button'},persistentResult:{persistent:true},alreadyOpen:{already:true},businessInfo:{business:true},staleResult:{stale:true}})){
+for(const [name,options]of Object.entries({plaintext:{editable:'plaintext-only'},emptyEditable:{editable:''},controlled:{controlled:true},buttonRow:{rowRole:'button'},persistentResult:{persistent:true},alreadyOpen:{already:true},businessInfo:{business:true},staleResult:{stale:true},alreadySearched:{prefilled:true}})){
  test('full search → verify → fill → send: '+name,async t=>{
   const f=fixture(t,options),job={phone,message:'Bom dia (nome)!'};
   await f.run(openConversation(job,{doc:f.doc,timeout:2000}));

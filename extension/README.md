@@ -132,4 +132,6 @@ Resultados anteriores à pesquisa não são escolhidos como um contato novo. Lin
 
 A leitura dos dados inclui Dados da empresa/Business info. O adaptador não clica num botão genérico de chamada, vídeo ou menu para tentar abrir dados do contato. Falhas na busca e nos dados recebem códigos específicos. O site recebe etapa e código, sem expor tokens do job nem o HTML do documento. Não há navegação por link nem recarga entre contatos.
 
-Verificação: 10 regressões da busca, 12 cenários nativos completos de busca → conferência → documento → legenda → confirmação, além das suítes já existentes. O teste qa/extension-browser.mjs carrega a extensão Manifest V3 em um perfil limpo e usa IPC/IndexedDB reais; toda resposta de WhatsApp nesse teste é uma página controlada. Nenhuma conta real ou destinatário externo é usado. Consulte o CI para o resultado executado.
+Verificação: 11 regressões da busca, 14 cenários nativos completos de busca → conferência → documento → legenda → confirmação, além das suítes já existentes. O teste qa/extension-browser.mjs carrega a extensão Manifest V3 em um perfil limpo e usa IPC/IndexedDB reais; toda resposta de WhatsApp nesse teste é uma página controlada. Nenhuma conta real ou destinatário externo é usado. Consulte o CI para o resultado executado.
+
+A retomada de uma busca já preenchida com o mesmo número permite abrir o resultado salvo por nome, mantendo a conferência do telefone antes do envio. Uma busca anterior por outro número continua bloqueada.

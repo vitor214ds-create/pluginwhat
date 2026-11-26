@@ -204,6 +204,7 @@ export async function openConversation(job, { doc = document, cancelled = () => 
   else if (!contactSearch(doc)) throw failure('CHAT_BUTTON_MISSING', 'O botão Nova conversa não foi encontrado. Confira o WhatsApp e retome.', true);
   const search = await until(() => contactSearch(doc), timeout, cancelled,
     failure('SEARCH_INPUT_NOT_FOUND', 'A busca Nova conversa abriu, mas o campo de pesquisar nome ou número não foi reconhecido. Nenhum envio foi realizado.', true));
+  const sameQuery = String(search.value ?? readText(search)).replace(/\D/g, '') === job.phone;
   const initialRows = new Map(contactRows(contactResultScope(search, doc), search).map(row => [row, normalizeText(readText(row))]));
   await onStage('searching');
   try { await fillComposer(search, `+${job.phone}`, doc, cancelled); }
@@ -226,7 +227,7 @@ export async function openConversation(job, { doc = document, cancelled = () => 
     // A saved contact can show only a name. Its number is verified in prepare BEFORE writing.
     const only = unique.length === 1 && unique[0];
     return only && !hasPhone(readText(only)) && ![...only.querySelectorAll('[title]')].some(node => hasPhone(node.getAttribute('title'))) &&
-      (!initialRows.has(only) || initialRows.get(only) !== normalizeText(readText(only))) && Date.now() - searchedAt >= Math.min(500, timeout / 2) && only;
+      (sameQuery || !initialRows.has(only) || initialRows.get(only) !== normalizeText(readText(only))) && Date.now() - searchedAt >= Math.min(500, timeout / 2) && only;
   }, timeout, cancelled, failure('SEARCH_RESULT_NOT_FOUND', 'O número foi preenchido, mas o WhatsApp não apresentou um resultado seguro para abrir. Confira conexão e busca. O contato permanece na fila.', true));
   checkCancelled(cancelled);
   await onStage('selecting');

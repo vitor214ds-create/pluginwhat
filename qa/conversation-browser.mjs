@@ -15,11 +15,11 @@ export async function runConversationBrowser(){
  try{
   browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{}),args:process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS):[]});
   const page=await browser.newPage();await page.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
-  for(const mode of ['plaintext','empty-editable','regular','input','controlled','button-result','nested-controls','persistent-result','stale-result','business','already-open','no-result','wrong-result']){
+  for(const mode of ['plaintext','empty-editable','regular','input','controlled','button-result','nested-controls','persistent-result','stale-result','business','already-searched','already-open','no-result','wrong-result']){
    await page.goto(origin+'/fixture');const result=await page.evaluate(mode=>qaRun(mode),mode),blocked=['no-result','wrong-result'].includes(mode);
    assert.equal(result.ok,!blocked,JSON.stringify({mode,...result}));assert.equal(result.wrongSelections,0,mode);
    assert.equal(result.sends.length,blocked?0:1,mode);
-   if(!blocked){assert.equal(result.sends[0].number,'5511912345678');assert.equal(result.evidence.fileName,'Empresa-previa.html');assert.ok(result.fileText.includes('Documento completo'));assert.ok(result.stages.includes('attaching'));if(mode!=='already-open')assert.ok(result.writes.includes('+5511912345678'));}
+   if(!blocked){assert.equal(result.sends[0].number,'5511912345678');assert.equal(result.evidence.fileName,'Empresa-previa.html');assert.ok(result.fileText.includes('Documento completo'));assert.ok(result.stages.includes('attaching'));if(!['already-open','already-searched'].includes(mode))assert.ok(result.writes.includes('+5511912345678'));}
    else{assert.equal(result.code,'SEARCH_RESULT_NOT_FOUND');assert.equal(result.selected,0);}
    console.log('PASS full native search/document flow',mode);
   }

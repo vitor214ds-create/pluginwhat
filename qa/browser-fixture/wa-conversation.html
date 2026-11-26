@@ -48,6 +48,7 @@ window.resetQA=(mode='plaintext')=>{
    document.execCommand=(...args)=>document.activeElement===search?false:original(...args);
    search.addEventListener('paste',event=>{event.preventDefault();search.innerText=event.clipboardData.getData('text/plain');results();});
   }
+  if(mode==='already-searched'){search.textContent='+'+phone;const cached=make('div',{role:'row'},'Contato salvo');cached.onclick=()=>{qaSelected++;panel.remove();chat(phone);};grid.append(cached);}
   if(mode==='stale-result'){
    const old=make('div',{role:'row'},'Cliente anterior');old.onclick=()=>{qaWrongSelections++;panel.remove();chat(other);};grid.append(old);
   }
