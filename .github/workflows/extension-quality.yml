@@ -1,0 +1,25 @@
+name: Extension quality
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: qa/package-lock.json
+      - run: npm --prefix qa ci
+      - run: node --test extension/test/*.test.mjs qa/*.test.mjs
+      - run: node scripts/check-extension.mjs
+      - run: node qa/realtime-scheduler.mjs
+      - run: npm --prefix qa exec -- playwright install --with-deps chromium
+      - run: node qa/native-browser.mjs
+      - run: node qa/attachment-browser.mjs
+      - run: python3 scripts/package-extension.py
